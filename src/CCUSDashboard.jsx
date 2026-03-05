@@ -37,13 +37,16 @@ export default function CCUSDashboard() {
   const [heatRateBtu, setHeatRateBtu] = useState(6722);
   const isPowerPlant = SC[src] && SC[src].cat === "Power";
   const hasCombustion = !!(EMIT_FACTORS[src]);
-  const plantCO2 = hasCombustion && plantMW > 0 ? plantMW * (plantCFpct / 100) * 8760 * (heatRateBtu / 1e6) * (EMIT_FACTORS[src] || 0) : 0;
-  const srcData = SC[src];
-  const refPlantCap = srcData ? srcData.rpc : 1;
-  const refCO2base = srcData ? (srcData.rco || (srcData.vr && srcData.vr[Object.keys(srcData.vr)[0]] ? srcData.vr[Object.keys(srcData.vr)[0]].rco : 0)) : 0;
-  const refCFbase = srcData ? srcData.cf || 0.85 : 0.85;
-  const nonCombCO2 = !hasCombustion && plantMW > 0 ? (plantMW / refPlantCap) * refCO2base * ((plantCFpct / 100) / refCFbase) : 0;
-  const derivedCO2 = hasCombustion ? plantCO2 : nonCombCO2;
+  // derivedCO2: only active for combustion sources in plant-cap mode.
+  // Uses user's plCap entry (MW) if provided, else falls back to PP_DEFAULTS plantMW.
+  // Non-combustion sources and combustion sources in CO₂ mode use standard co2Cap/plCap logic.
+  const plantCapForDeriv = hasCombustion && mode === "plant"
+    ? (parseFloat(plCap) > 0 ? parseFloat(plCap) : plantMW)
+    : 0;
+  const plantCFForDeriv = parseFloat(cfIn) > 0 && parseFloat(cfIn) <= 100 ? parseFloat(cfIn) : plantCFpct;
+  const derivedCO2 = plantCapForDeriv > 0
+    ? plantCapForDeriv * (plantCFForDeriv / 100) * 8760 * (heatRateBtu / 1e6) * (EMIT_FACTORS[src] || 0)
+    : 0;
 
   /* Capital Structure */
   const [debtPct, setDebtPct] = useState(54);
