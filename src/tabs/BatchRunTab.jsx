@@ -68,25 +68,49 @@ export default function BatchRunTab({
     const reader = new FileReader();
     reader.onload = (evt) => {
       try {
-        const wb = XLSX.read(evt.target.result, { type: "array" });
-        const ws = wb.Sheets[wb.SheetNames[0]];
+        const wb = XLSX.read(new Uint8Array(evt.target.result), { type: "array" });
+
+        // Pick the most relevant sheet: prefer one with "input" or "batch" in name, else first
+        const sheetName = wb.SheetNames.find(n => /input|batch/i.test(n)) || wb.SheetNames[0];
+        const ws = wb.Sheets[sheetName];
         const json = XLSX.utils.sheet_to_json(ws, { defval: "" });
-        if (json.length === 0) { setBatchError("No data found in file"); return; }
+        if (json.length === 0) {
+          setBatchError("No data rows found — fill in the \"📋 Batch Input\" sheet starting at row 2, then upload.");
+          return;
+        }
+
         const hdrs = Object.keys(json[0]);
         setBatchHeaders(hdrs);
         setBatchPreview(json.slice(0, 5));
         setBatchData(json);
 
+        // Normalize a header string: lowercase, strip non-alphanumeric, collapse spaces
+        const norm = h => h.toLowerCase().replace(/[^a-z0-9]/g, " ").replace(/\s+/g, " ").trim();
+
         const autoMap = { state: "", source: "", co2: "", plantCap: "", plantCF: "", heatRate: "" };
+
+        // Pass 1 — high-specificity exact/phrase matches
         hdrs.forEach(h => {
-          const hl = h.toLowerCase();
-          if (hl.includes("state") || hl.includes("province")) autoMap.state = autoMap.state || h;
-          if (hl.includes("source") || hl.includes("sector") || hl.includes("emission source")) autoMap.source = autoMap.source || h;
-          if (hl.includes("co2") || hl.includes("carbon") || hl.includes("emission") && !hl.includes("source")) autoMap.co2 = autoMap.co2 || h;
-          if (hl.includes("capacity") && !hl.includes("factor") && !hl.includes("capture")) autoMap.plantCap = autoMap.plantCap || h;
-          if ((hl.includes("capacity factor") || hl.includes("plant cf") || hl === "cf") && !hl.includes("capture")) autoMap.plantCF = autoMap.plantCF || h;
-          if (hl.includes("heat rate") || hl.includes("heatrate") || hl.includes("hr")) autoMap.heatRate = autoMap.heatRate || h;
+          const hl = norm(h);
+          if (!autoMap.state    && (hl === "state" || hl === "st" || hl === "state code" || hl === "state abbreviation")) autoMap.state = h;
+          if (!autoMap.source   && (hl === "emission source" || hl === "source" || hl === "emissions source" || hl === "source type" || hl === "facility type" || hl === "industry type" || hl === "sector")) autoMap.source = h;
+          if (!autoMap.co2      && (hl === "co2" || hl === "co2 tpa" || hl === "co2 emissions" || hl === "co2 emissions tpa" || hl === "annual co2" || hl === "ghg emissions" || hl === "emissions tpa")) autoMap.co2 = h;
+          if (!autoMap.plantCF  && (hl === "cf" || hl === "plant cf" || hl === "capacity factor" || hl === "cap factor")) autoMap.plantCF = h;
+          if (!autoMap.plantCap && (hl === "capacity" || hl === "plant capacity" || hl === "plant mw" || hl === "mw" || hl === "size" || hl === "nameplate capacity")) autoMap.plantCap = h;
+          if (!autoMap.heatRate && (hl === "heat rate" || hl === "heatrate" || hl === "hr")) autoMap.heatRate = h;
         });
+
+        // Pass 2 — broader partial matches for remaining unmapped fields
+        hdrs.forEach(h => {
+          const hl = norm(h);
+          if (!autoMap.state    && (hl.includes("state") || hl.includes("province") || hl.includes("location"))) autoMap.state = h;
+          if (!autoMap.source   && (hl.includes("emission source") || hl.includes("industry type") || hl.includes("facility type") || hl.includes("source type") || hl.includes("sector") || hl.includes("fuel type") || (hl.includes("source") && !hl.includes("data source") && !hl.includes("co2")))) autoMap.source = h;
+          if (!autoMap.co2      && (hl.includes("co2") || hl.includes("co 2") || hl.includes("carbon dioxide") || hl.includes("ghg") || hl.includes("emissions") || (hl.includes("emission") && !hl.includes("source") && !hl.includes("factor")))) autoMap.co2 = h;
+          if (!autoMap.plantCF  && (hl.includes("capacity factor") || hl.includes("cap factor") || hl.includes("plant cf") || hl.includes("utilization") || hl.includes("load factor"))) autoMap.plantCF = h;
+          if (!autoMap.plantCap && ((hl.includes("capacity") && !hl.includes("factor") && !hl.includes("capture") && !hl.includes("cf")) || hl.includes("plant size") || hl.includes("nameplate") || (hl.includes("mw") && !hl.includes("mwh")))) autoMap.plantCap = h;
+          if (!autoMap.heatRate && (hl.includes("heat rate") || hl.includes("heatrate") || hl.includes("btu") || hl.includes("mmbtu"))) autoMap.heatRate = h;
+        });
+
         setBatchColMap(autoMap);
       } catch (err) {
         setBatchError("Error reading file: " + err.message);
@@ -137,9 +161,11 @@ export default function BatchRunTab({
           const sTOC = sTIC * (vd.toc / vd.tic);
           const annCO2 = pCO2 * cf2;
 
-          const foScale = sR !== 1 ? Math.pow(sR, 0.15) : 1;
-          const sFO = vd.fo * cR2 * lR2 * foScale * tF.fo;
-          const sVO = vd.vo * cR2 * tF.vo;
+          // Fixed O&M: 1/sR exponent matches main model (smaller plants → higher $/t fixed cost)
+          // Variable O&M and OPEX tech multiplier uses tF.opex, consistent with TECH constant definition
+          const foScale = sR !== 1 ? Math.pow(1 / sR, 0.15) : 1;
+          const sFO = vd.fo * foScale * cR2 * tF.opex;
+          const sVO = vd.vo * cR2 * tF.opex;
 
           const ePP = (EIA[stCode] || 8) * 10;
           const ePW = vd.pw * sR * tF.power;
@@ -169,20 +195,38 @@ export default function BatchRunTab({
           const gasLCOC = sFL * at;
           const lcoc = capexLCOC + foLCOC + voLCOC + elecLCOC + gasLCOC;
 
+          // Pre-tax OPEX components (for reference)
+          const foPreTax = sFO;
+          const voPreTax = sVO;
+          const elecPreTax = pPt;
+          const gasPreTax = sFL;
+          const lcocPreTax = capexLCOC + foPreTax + voPreTax + elecPreTax + gasPreTax;
+
           processed++;
           results.push({
             ...row,
             _status: "OK",
             _srcResolved: srcName,
             _stateResolved: stCode,
-            "CCUS Model LCOC": Math.round(lcoc * 100) / 100,
-            "CAPEX $MM": Math.round(sTOC / 1e6 * 100) / 100,
-            "CAPEX $/t": Math.round(capexLCOC * 100) / 100,
-            "Fixed OPEX $/t": Math.round(foLCOC * 100) / 100,
-            "Variable OPEX $/t": Math.round(voLCOC * 100) / 100,
-            "Electricity $/t": Math.round(elecLCOC * 100) / 100,
-            "Nat Gas $/t": Math.round(gasLCOC * 100) / 100,
-            "CO2 tpa": Math.round(pCO2),
+            // ── CAPEX ──────────────────────────────────────────
+            "CAPEX $MM":                    Math.round(sTOC / 1e6 * 100) / 100,
+            "CAPEX After-Tax $/t":          Math.round(capexLCOC * 100) / 100,
+            // ── OPEX — After-Tax $/t ───────────────────────────
+            "Fixed OPEX After-Tax $/t":     Math.round(foLCOC * 100) / 100,
+            "Variable OPEX After-Tax $/t":  Math.round(voLCOC * 100) / 100,
+            "Electricity After-Tax $/t":    Math.round(elecLCOC * 100) / 100,
+            "Nat Gas After-Tax $/t":        Math.round(gasLCOC * 100) / 100,
+            // ── OPEX — Pre-Tax $/t (reference) ─────────────────
+            "Fixed OPEX Pre-Tax $/t":       Math.round(foPreTax * 100) / 100,
+            "Variable OPEX Pre-Tax $/t":    Math.round(voPreTax * 100) / 100,
+            "Electricity Pre-Tax $/t":      Math.round(elecPreTax * 100) / 100,
+            "Nat Gas Pre-Tax $/t":          Math.round(gasPreTax * 100) / 100,
+            // ── Totals ─────────────────────────────────────────
+            "LCOC After-Tax $/t":           Math.round(lcoc * 100) / 100,
+            "LCOC Pre-Tax $/t":             Math.round(lcocPreTax * 100) / 100,
+            // ── Volume ─────────────────────────────────────────
+            "CO2 Captured tpa":             Math.round(annCO2),
+            "CO2 Source tpa":               Math.round(pCO2),
           });
         });
 
@@ -230,7 +274,6 @@ export default function BatchRunTab({
             <button onClick={() => {
               try {
                 // ── Sheet 1: Blank Input Template ──────────────────────────────
-                // Header row
                 const headers = [
                   "Facility Name",
                   "State",
@@ -241,25 +284,11 @@ export default function BatchRunTab({
                   "Heat Rate (MMBtu/MWh)",
                   "Notes"
                 ];
-                // Description row (row 2) — grayed out guide text
-                const descRow = [
-                  "Your facility or project name (optional label only)",
-                  "2-letter US state code — e.g. TX, CA, LA  [REQUIRED]",
-                  "Emission source type — see Source Reference sheet  [REQUIRED]",
-                  "Annual CO₂ captured in tonnes/yr. Leave blank to use model reference.",
-                  "Plant output in the source's native units (MW, MMSCFD, t/yr, etc.). Optional.",
-                  "Capacity factor as a percent (1–100). Default applied from Model Settings if blank.",
-                  "Heat rate in MMBtu/MWh — only needed for NGCC and Coal sources. Leave blank otherwise.",
-                  "Free text notes — not used in calculations"
-                ];
-                const ws1 = XLSX.utils.aoa_to_sheet([headers, descRow]);
-                // Column widths
+                // Headers only — no description row so upload parses cleanly
+                const ws1 = XLSX.utils.aoa_to_sheet([headers]);
                 ws1["!cols"] = [{wch:26},{wch:8},{wch:22},{wch:20},{wch:16},{wch:13},{wch:20},{wch:30}];
-                // Style description row as italic/gray by setting cell types
-                headers.forEach((_, ci) => {
-                  const addr = XLSX.utils.encode_cell({ r: 1, c: ci });
-                  if (!ws1[addr]) ws1[addr] = { t: "s", v: descRow[ci] };
-                });
+                // Freeze the header row
+                ws1["!freeze"] = { xSplit: 0, ySplit: 1, topLeftCell: "A2" };
 
                 // ── Sheet 2: Source Reference ───────────────────────────────────
                 const sourceRef = [
@@ -340,7 +369,7 @@ export default function BatchRunTab({
             {batchData && <span style={{ fontSize: 12, color: "#58b947", fontWeight: 700 }}>{batchData.length.toLocaleString()} rows loaded</span>}
           </div>
           <div style={{ marginTop: 10, fontSize: 11, color: "#888" }}>
-            Downloads a blank Excel template with column headers and a field guide. Fill in the <strong>"📋 Batch Input"</strong> sheet — State and Emission Source are required; CO₂ or Plant Capacity recommended. See the <strong>Field Guide</strong>, <strong>Source Reference</strong>, and <strong>State Reference</strong> sheets for valid values.
+            Downloads a blank Excel template ready to upload. Fill in the <strong>"📋 Batch Input"</strong> sheet starting at row 2 — State and Emission Source are required, CO₂ or Plant Capacity recommended. See the <strong>Field Guide</strong>, <strong>Source Reference</strong>, and <strong>State Reference</strong> sheets for valid values and aliases.
           </div>
           {batchError && <div style={{ marginTop: 10, padding: 10, background: "#fef2f2", border: "1px solid #b83a4b", color: "#b83a4b", fontSize: 12, borderRadius: 4 }}>{batchError}</div>}
 
@@ -360,24 +389,37 @@ export default function BatchRunTab({
         <div style={sec}>
           <div style={secH}>2. Map Columns</div>
           <div style={{ padding: 18 }}>
-            <div style={{ fontSize: 11, color: "#888", marginBottom: 12 }}>Map your columns to the model inputs. State and Source are required. CO2 is optional (model will use reference values if blank).</div>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 12 }}>
+            Columns auto-detected from your headers. <strong>State</strong> and <strong>Emission Source</strong> are required. Adjust any dropdown if the auto-selection is wrong.
+          </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               {[
-                { key: "state", label: "State", required: true },
-                { key: "source", label: "Emission Source", required: true },
-                { key: "co2", label: "CO2 Emissions (tpa)", required: false },
-                { key: "plantCap", label: "Plant Capacity", required: false },
-                { key: "plantCF", label: "Plant Capacity Factor (%)", required: false },
-                { key: "heatRate", label: "Heat Rate (MMBtu/MWh)", required: false },
-              ].map(f => (
-                <div key={f.key} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: "#333", minWidth: 160 }}>{f.label} {f.required && <span style={{ color: "#b83a4b" }}>*</span>}</span>
-                  <select value={batchColMap[f.key]} onChange={(e) => setBatchColMap(prev => ({ ...prev, [f.key]: e.target.value }))} style={mapSel}>
-                    <option value="">— none —</option>
-                    {batchHeaders.map(h => <option key={h} value={h}>{h}</option>)}
-                  </select>
-                </div>
-              ))}
+                { key: "state",    label: "State",                      required: true,  hint: "2-letter code: TX, CA, LA …" },
+                { key: "source",   label: "Emission Source",             required: true,  hint: "e.g. NGCC F-Frame, Cement, Ammonia" },
+                { key: "co2",      label: "CO₂ Emissions (tpa)",        required: false, hint: "Annual t CO₂ from source. Uses NETL ref if blank." },
+                { key: "plantCap", label: "Plant Capacity",             required: false, hint: "MW, MMSCFD, t/yr — native units" },
+                { key: "plantCF",  label: "Plant Capacity Factor (%)",  required: false, hint: "1–100. Falls back to Model Settings if blank." },
+                { key: "heatRate", label: "Heat Rate (MMBtu/MWh)",      required: false, hint: "Required for NGCC / Coal sources." },
+              ].map(f => {
+                const isAutoDetected = !!batchColMap[f.key];
+                const isMissing = f.required && !batchColMap[f.key];
+                return (
+                  <div key={f.key} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: isMissing ? "#b83a4b" : "#333", minWidth: 10 }}>
+                        {f.label} {f.required && <span style={{ color: "#b83a4b" }}>*</span>}
+                      </span>
+                      {isAutoDetected && <span style={{ fontSize: 10, color: "#58b947", fontWeight: 700 }}>✓ auto</span>}
+                      {isMissing     && <span style={{ fontSize: 10, color: "#b83a4b", fontWeight: 700 }}>required</span>}
+                    </div>
+                    <select value={batchColMap[f.key]} onChange={(e) => setBatchColMap(prev => ({ ...prev, [f.key]: e.target.value }))} style={{ ...mapSel, borderColor: isMissing ? "#b83a4b" : "#ccc" }}>
+                      <option value="">— not mapped —</option>
+                      {batchHeaders.map(h => <option key={h} value={h}>{h}</option>)}
+                    </select>
+                    <span style={{ fontSize: 10, color: "#aaa" }}>{f.hint}</span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -443,33 +485,70 @@ export default function BatchRunTab({
 
             <div style={{ overflow: "auto", maxHeight: 500 }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-                <thead><tr>
-                  <th style={{ padding: "6px 8px", background: "#f5f5f5", border: "1px solid #e0e0e0", fontWeight: 700, position: "sticky", top: 0, textAlign: "left" }}>Status</th>
-                  <th style={{ padding: "6px 8px", background: "#f5f5f5", border: "1px solid #e0e0e0", fontWeight: 700, position: "sticky", top: 0, textAlign: "left" }}>State</th>
-                  <th style={{ padding: "6px 8px", background: "#f5f5f5", border: "1px solid #e0e0e0", fontWeight: 700, position: "sticky", top: 0, textAlign: "left" }}>Source</th>
-                  <th style={{ padding: "6px 8px", background: "#f5f5f5", border: "1px solid #e0e0e0", fontWeight: 700, position: "sticky", top: 0, textAlign: "right" }}>CO2 tpa</th>
-                  <th style={{ padding: "6px 8px", background: "#58b947", border: "1px solid #e0e0e0", fontWeight: 700, position: "sticky", top: 0, textAlign: "right", color: "#fff" }}>LCOC $/t</th>
-                  <th style={{ padding: "6px 8px", background: "#f5f5f5", border: "1px solid #e0e0e0", fontWeight: 700, position: "sticky", top: 0, textAlign: "right" }}>CAPEX $/t</th>
-                  <th style={{ padding: "6px 8px", background: "#f5f5f5", border: "1px solid #e0e0e0", fontWeight: 700, position: "sticky", top: 0, textAlign: "right" }}>Fixed $/t</th>
-                  <th style={{ padding: "6px 8px", background: "#f5f5f5", border: "1px solid #e0e0e0", fontWeight: 700, position: "sticky", top: 0, textAlign: "right" }}>Var $/t</th>
-                  <th style={{ padding: "6px 8px", background: "#f5f5f5", border: "1px solid #e0e0e0", fontWeight: 700, position: "sticky", top: 0, textAlign: "right" }}>Elec $/t</th>
-                  <th style={{ padding: "6px 8px", background: "#f5f5f5", border: "1px solid #e0e0e0", fontWeight: 700, position: "sticky", top: 0, textAlign: "right" }}>Gas $/t</th>
-                </tr></thead>
+                <thead>
+                  {/* Group header row */}
+                  <tr>
+                    <th colSpan={4} style={{ padding: "4px 8px", background: "#f5f5f5", border: "1px solid #e0e0e0", fontWeight: 700, position: "sticky", top: 0, textAlign: "center" }}></th>
+                    <th colSpan={2} style={{ padding: "4px 8px", background: "#e8f5e9", border: "1px solid #e0e0e0", fontWeight: 700, position: "sticky", top: 0, textAlign: "center", color: "#2e7d32" }}>CAPEX</th>
+                    <th colSpan={4} style={{ padding: "4px 8px", background: "#e3f2fd", border: "1px solid #e0e0e0", fontWeight: 700, position: "sticky", top: 0, textAlign: "center", color: "#1565c0" }}>After-Tax $/t CO₂</th>
+                    <th colSpan={4} style={{ padding: "4px 8px", background: "#fff8e1", border: "1px solid #e0e0e0", fontWeight: 700, position: "sticky", top: 0, textAlign: "center", color: "#f57f17" }}>Pre-Tax $/t CO₂ (ref)</th>
+                    <th colSpan={2} style={{ padding: "4px 8px", background: "#f3e5f5", border: "1px solid #e0e0e0", fontWeight: 700, position: "sticky", top: 0, textAlign: "center", color: "#6a1b9a" }}>Totals</th>
+                    <th colSpan={2} style={{ padding: "4px 8px", background: "#f5f5f5", border: "1px solid #e0e0e0", fontWeight: 700, position: "sticky", top: 0, textAlign: "center" }}>Volume</th>
+                  </tr>
+                  {/* Column header row */}
+                  <tr>
+                    {[
+                      { label: "Status",       align: "left"  },
+                      { label: "State",        align: "left"  },
+                      { label: "Source",       align: "left"  },
+                      { label: "Facility",     align: "left"  },
+                      { label: "CAPEX $MM",    align: "right", bg: "#e8f5e9" },
+                      { label: "CAPEX $/t",    align: "right", bg: "#e8f5e9" },
+                      { label: "Fixed $/t",    align: "right", bg: "#e3f2fd" },
+                      { label: "Variable $/t", align: "right", bg: "#e3f2fd" },
+                      { label: "Elec $/t",     align: "right", bg: "#e3f2fd" },
+                      { label: "Gas $/t",      align: "right", bg: "#e3f2fd" },
+                      { label: "Fixed $/t",    align: "right", bg: "#fff8e1" },
+                      { label: "Variable $/t", align: "right", bg: "#fff8e1" },
+                      { label: "Elec $/t",     align: "right", bg: "#fff8e1" },
+                      { label: "Gas $/t",      align: "right", bg: "#fff8e1" },
+                      { label: "LCOC AT $/t",  align: "right", bg: "#e8d5fb", bold: true },
+                      { label: "LCOC PT $/t",  align: "right", bg: "#f3e5f5" },
+                      { label: "CO₂ Cap tpa",  align: "right" },
+                      { label: "CO₂ Src tpa",  align: "right" },
+                    ].map((h, i) => (
+                      <th key={i} style={{ padding: "5px 8px", background: h.bg || "#f5f5f5", border: "1px solid #e0e0e0", fontWeight: h.bold ? 800 : 700, position: "sticky", top: 24, textAlign: h.align, whiteSpace: "nowrap", fontSize: 10 }}>{h.label}</th>
+                    ))}
+                  </tr>
+                </thead>
                 <tbody>
-                  {batchResults.rows.slice(0, 200).map((r, i) => (
-                    <tr key={i} style={{ background: r._status === "Skipped" ? "#fef2f2" : i % 2 === 0 ? "#fff" : "#fafafa" }}>
-                      <td style={{ padding: "4px 8px", border: "1px solid #f0f0f0", color: r._status === "OK" ? "#58b947" : "#b83a4b", fontWeight: 700 }}>{r._status}{r._reason ? " — " + r._reason : ""}</td>
-                      <td style={{ padding: "4px 8px", border: "1px solid #f0f0f0" }}>{r._stateResolved || "—"}</td>
-                      <td style={{ padding: "4px 8px", border: "1px solid #f0f0f0" }}>{r._srcResolved || "—"}</td>
-                      <td style={{ padding: "4px 8px", border: "1px solid #f0f0f0", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{r["CO2 tpa"] ? r["CO2 tpa"].toLocaleString() : "—"}</td>
-                      <td style={{ padding: "4px 8px", border: "1px solid #f0f0f0", textAlign: "right", fontWeight: 700, color: "#58b947", fontVariantNumeric: "tabular-nums" }}>{r["CCUS Model LCOC"] != null ? "$" + r["CCUS Model LCOC"].toFixed(2) : "—"}</td>
-                      <td style={{ padding: "4px 8px", border: "1px solid #f0f0f0", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{r["CAPEX $/t"] != null ? "$" + r["CAPEX $/t"].toFixed(2) : "—"}</td>
-                      <td style={{ padding: "4px 8px", border: "1px solid #f0f0f0", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{r["Fixed OPEX $/t"] != null ? "$" + r["Fixed OPEX $/t"].toFixed(2) : "—"}</td>
-                      <td style={{ padding: "4px 8px", border: "1px solid #f0f0f0", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{r["Variable OPEX $/t"] != null ? "$" + r["Variable OPEX $/t"].toFixed(2) : "—"}</td>
-                      <td style={{ padding: "4px 8px", border: "1px solid #f0f0f0", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{r["Electricity $/t"] != null ? "$" + r["Electricity $/t"].toFixed(2) : "—"}</td>
-                      <td style={{ padding: "4px 8px", border: "1px solid #f0f0f0", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{r["Nat Gas $/t"] != null ? "$" + r["Nat Gas $/t"].toFixed(2) : "—"}</td>
-                    </tr>
-                  ))}
+                  {batchResults.rows.slice(0, 200).map((r, i) => {
+                    const ok = r._status === "OK";
+                    const facilityCol = batchColMap.state ? Object.keys(r).find(k => k !== batchColMap.state && k !== batchColMap.source && k !== batchColMap.co2 && !k.startsWith("_") && !["CAPEX $MM","CAPEX After-Tax $/t","Fixed OPEX After-Tax $/t","Variable OPEX After-Tax $/t","Electricity After-Tax $/t","Nat Gas After-Tax $/t","Fixed OPEX Pre-Tax $/t","Variable OPEX Pre-Tax $/t","Electricity Pre-Tax $/t","Nat Gas Pre-Tax $/t","LCOC After-Tax $/t","LCOC Pre-Tax $/t","CO2 Captured tpa","CO2 Source tpa"].includes(k)) : null;
+                    const f = v => v != null ? "$" + v.toFixed(2) : "—";
+                    return (
+                      <tr key={i} style={{ background: !ok ? "#fef2f2" : i % 2 === 0 ? "#fff" : "#fafafa" }}>
+                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", color: ok ? "#58b947" : "#b83a4b", fontWeight: 700, whiteSpace: "nowrap" }}>{r._status}{r._reason ? " — " + r._reason : ""}</td>
+                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0" }}>{r._stateResolved || "—"}</td>
+                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", whiteSpace: "nowrap" }}>{r._srcResolved || "—"}</td>
+                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", color: "#888", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{facilityCol ? String(r[facilityCol] || "").substring(0, 25) : "—"}</td>
+                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", background: "#f7fdf7" }}>{r["CAPEX $MM"] != null ? r["CAPEX $MM"].toFixed(1) : "—"}</td>
+                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", background: "#f7fdf7" }}>{f(r["CAPEX After-Tax $/t"])}</td>
+                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", background: "#f0f8ff" }}>{f(r["Fixed OPEX After-Tax $/t"])}</td>
+                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", background: "#f0f8ff" }}>{f(r["Variable OPEX After-Tax $/t"])}</td>
+                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", background: "#f0f8ff" }}>{f(r["Electricity After-Tax $/t"])}</td>
+                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", background: "#f0f8ff" }}>{f(r["Nat Gas After-Tax $/t"])}</td>
+                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", color: "#aaa" }}>{f(r["Fixed OPEX Pre-Tax $/t"])}</td>
+                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", color: "#aaa" }}>{f(r["Variable OPEX Pre-Tax $/t"])}</td>
+                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", color: "#aaa" }}>{f(r["Electricity Pre-Tax $/t"])}</td>
+                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", color: "#aaa" }}>{f(r["Nat Gas Pre-Tax $/t"])}</td>
+                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", fontWeight: 700, color: "#58b947", background: "#f5eeff" }}>{f(r["LCOC After-Tax $/t"])}</td>
+                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", color: "#888" }}>{f(r["LCOC Pre-Tax $/t"])}</td>
+                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{r["CO2 Captured tpa"] ? r["CO2 Captured tpa"].toLocaleString() : "—"}</td>
+                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", color: "#aaa", fontVariantNumeric: "tabular-nums" }}>{r["CO2 Source tpa"] ? r["CO2 Source tpa"].toLocaleString() : "—"}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
               {batchResults.rows.length > 200 && <div style={{ padding: 10, fontSize: 11, color: "#888", textAlign: "center" }}>Showing first 200 of {batchResults.rows.length.toLocaleString()} rows. Export for full results.</div>}

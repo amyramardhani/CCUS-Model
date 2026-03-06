@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import Tip from '../components/Tip';
 import { SC, TECH, LF, CEPCI, CX_COLORS, CDR_TYPES, AVOID_TYPES, EMIT_FACTORS, BASE_GP, HUB_BASIS, HUB_NAME, MACRS, EIA, NETL_FIN, NETL_DEFAULT } from '../constants';
 import { fm, fd, toMWh, hhBase, hhStripPrice, bestCreditType } from '../utils/helpers';
@@ -19,6 +20,7 @@ export default function SummaryTab({
   setFedTax, setStateTax, setStateTaxOverride, setDeprMethod, setBonusDepr, setBonusDeprPct,
   setUse45Q, setQ45Duration, setQ45Inflation, setQ45StartYear, setUse48C, setItcPct, setGrantAmt,
   setUseCDRCredit, setCdrCreditType, setCdrCreditRate, setUseAvoidCredit, setAvoidCreditType, setAvoidCreditRate, setVcmDuration,
+  setLastInputBox,
 }) {
   const sd = SC[src];
   const aR = sd ? sd.cr : ["99%"];
@@ -29,6 +31,10 @@ export default function SummaryTab({
   const eM = toMWh(st);
   const hasCombustion = !!(EMIT_FACTORS[src]);
   const srcData = SC[src];
+  // Local state for formatted number inputs in the 4-box combustion panel
+  const [activeBox, setActiveBox] = useState(null);  // 'plant'|'expOut'|'co2Prod'|'co2Capt'
+  const [editStr,   setEditStr]   = useState('');
+  const fmtNum = v => v > 0 ? v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
   const refPlantCap = srcData ? srcData.rpc : 1;
   const refCO2base = srcData ? (srcData.rco || (srcData.vr && srcData.vr[Object.keys(srcData.vr)[0]] ? srcData.vr[Object.keys(srcData.vr)[0]].rco : 0)) : 0;
   const refCFbase = srcData ? srcData.cf || 0.85 : 0.85;
@@ -98,62 +104,147 @@ export default function SummaryTab({
 
         <div style={sec}>
           <div style={{...secH, borderLeft: "3px solid #58a7af"}}>Production Parameters</div>
-          <div style={row}>
-            <span style={rowL}>Input Mode</span>
-            <div style={{ display: "flex", borderRadius: 0, overflow: "hidden", border: "1px solid #e0e0e0" }}>
-              {["co2", "plant"].map(m => (
-                <button key={m} onClick={() => {
-                  if (m === mode) return;
-                  const v2 = vd;
-                  if (!v2) { setMode(m); return; }
-                  const refCO2 = v2.rco, refCF = v2.cf, rpc = v2.rpc;
-                  const userCF = parseFloat(cfIn);
-                  const cf = (userCF > 0 && userCF <= 100) ? userCF / 100 : refCF;
-                  if (m === "plant" && mode === "co2") {
-                    const uC = parseFloat(co2Cap);
-                    if (uC > 0) {
-                      const sR = (uC / (cf / refCF)) / refCO2;
-                      setPlCap(Math.round(sR * rpc).toString());
-                    }
-                  } else if (m === "co2" && mode === "plant") {
-                    const uP = parseFloat(plCap);
-                    if (uP > 0) {
-                      const sR = uP / rpc;
-                      const pCO2 = refCO2 * sR * (cf / refCF);
-                      setCo2Cap(Math.round(pCO2).toString());
-                    }
-                  }
-                  setMode(m);
-                }} style={{ padding: "5px 12px", fontSize: 11, fontWeight: 600, border: "none", cursor: "pointer", background: mode === m ? "#58b947" : "#f5f5f5", color: mode === m ? "#fff" : "#aaaaaa" }}>
-                  {m === "co2" ? "CO₂ t/yr" : "Plant Cap"}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div style={row}>
-            <span style={rowL}>{mode === "co2" ? <Tip k="Project CO₂">Target CO₂</Tip> : "Plant Capacity"}</span>
-            <div style={rowR}>
-              <input type="number" value={mode === "co2" ? co2Cap : plCap} onChange={(e) => mode === "co2" ? setCo2Cap(e.target.value) : setPlCap(e.target.value)} placeholder={mode === "co2" ? fm(vd ? vd.rco : 0, 0) : fm(vd ? vd.rpc : 0, 0)} style={{...fi, width: 110}} />
-              <span style={unit}>{mode === "co2" ? "t/yr" : (vd ? vd.rpu : "")}</span>
-            </div>
-          </div>
-          <div style={hasCombustion ? row : {...row, borderBottom: "none"}}>
-            <span style={rowL}><Tip k="Capacity Factor">Capacity Factor</Tip></span>
-            <div style={rowR}>
-              <input type="number" value={cfIn} onChange={(e) => setCfIn(e.target.value)} placeholder="85" min="1" max="100" step="1" style={{...fi, width: 70}} />
-              <span style={unit}>%</span>
-            </div>
-          </div>
-          {hasCombustion && (
-            <div style={{...row, borderBottom: "none"}}>
-              <span style={rowL}>Heat Rate</span>
-              <div style={rowR}>
-                <input type="number" value={heatRateBtu} onChange={(e) => setHeatRateBtu(Number(e.target.value) || 0)} min="1" step="0.1" style={{...fi, width: 90}} />
-                <span style={unit}>MMBtu/MWh</span>
-              </div>
-            </div>
-          )}
-          {(src === "NGCC F-Frame" || src === "NGCC H-Frame") && cfIn && (<div style={sub}>Equip sized at 100% CF; operating at {cfIn}%</div>)}
+
+          {vd ? (() => {
+            // ── Unified 4-box linked system for all source types ──────────────
+            const rpc    = vd.rpc;
+            const pw     = vd.pw || 0;
+            const refCF  = vd.cf;
+            const cfDec  = (parseFloat(cfIn) > 0 && parseFloat(cfIn) <= 100) ? parseFloat(cfIn) / 100 : refCF;
+            const crDec  = crCustom / 100;
+            const crRef  = parseInt(cr.replace('%', '')) / 100;   // selected capture rate as decimal
+
+            const isCombustion = !!(EMIT_FACTORS[src]);
+            const efT = EMIT_FACTORS[src] || 0;   // t CO₂/MMBtu (0 for non-combustion)
+            const hr  = heatRateBtu;               // MMBtu/MWh
+
+            // All 4 boxes share the same plCap state as source of truth
+            const plantCap = parseFloat(plCap) > 0 ? parseFloat(plCap) : 0;
+
+            // ── Derived values ────────────────────────────────────────────────
+            let expOut, co2Prod, co2Capt;
+            let fromExpOut, fromCO2Prod, fromCO2Capt;
+            let capUnit, capHint, expUnit, co2ProdHint;
+
+            if (isCombustion) {
+              // Combustion (NGCC, Coal): use heat rate + emission factor
+              // Plant cap = gross MW (nameplate at 100% CF, before CCS power draw)
+              expOut   = plantCap * cfDec * 8760;                // MWh/yr (gross MW × CF × 8,760)
+              co2Prod  = expOut * hr * efT;                      // t/yr (MWh × MMBtu/MWh × t/MMBtu)
+              co2Capt  = co2Prod * crDec;
+              fromExpOut   = v => v / (cfDec * 8760);
+              fromCO2Prod  = v => v / (cfDec * 8760 * hr * efT);
+              fromCO2Capt  = v => (v / crDec) / (cfDec * 8760 * hr * efT);
+              capUnit     = "MW";
+              capHint     = "Gross MW (nameplate, 100% CF)";
+              expUnit     = "MWh/yr";
+              co2ProdHint = `Output × HR × ${(efT * 1000).toFixed(2)} kg/MMBtu ÷ 1,000`;
+            } else {
+              // Non-combustion (industrial, CDR, BECCS): scale from NETL reference CO₂
+              // At reference: rco t CO₂ captured at crRef capture rate → CO₂ produced = rco/crRef
+              // Scale by plant size (plantCap/rpc) and CF ratio (cfDec/refCF)
+              const refCO2Prod = vd.rco / crRef;                 // t CO₂ produced at ref plant + ref CF
+              expOut   = plantCap * cfDec;                        // effective throughput (native units × CF)
+              co2Prod  = expOut * refCO2Prod / (rpc * refCF);    // t/yr produced
+              co2Capt  = co2Prod * crDec;
+              fromExpOut   = v => v / cfDec;
+              fromCO2Prod  = v => v * rpc * refCF / (cfDec * refCO2Prod);
+              fromCO2Capt  = v => (v / crDec) * rpc * refCF / (cfDec * refCO2Prod);
+              capUnit     = vd.rpu || "units";
+              capHint     = `Nameplate capacity`;
+              expUnit     = vd.rpu || "units";
+              co2ProdHint = `Scaled from NETL ref: ${fm(vd.rco, 0)} t/yr at ${rpc.toLocaleString()} ${capUnit}`;
+            }
+
+            // Formatted input box helper
+            const dispIn = (boxId, derivedVal, onCommit, unitLabel, isFinal = false) => {
+              const isEditing = activeBox === boxId;
+              const displayVal = isEditing ? editStr : fmtNum(derivedVal);
+              return (
+                <div style={rowR}>
+                  <input type="text" value={displayVal} placeholder="—"
+                    style={{...fi, width: 130, borderColor: isFinal ? "#58b947" : "#ccc",
+                      boxShadow: isFinal ? "0 0 0 1px #58b94740" : "none", textAlign: "right"}}
+                    onFocus={() => { setActiveBox(boxId); setEditStr(derivedVal > 0 ? String(Math.round(derivedVal * 100) / 100) : ''); }}
+                    onChange={e => setEditStr(e.target.value)}
+                    onBlur={() => { const v = parseFloat(editStr.replace(/,/g, '')); if (v > 0) { onCommit(v); if (setLastInputBox) setLastInputBox(boxId); } setActiveBox(null); }} />
+                  <span style={unit}>{unitLabel}</span>
+                </div>
+              );
+            };
+
+            return (
+              <>
+                {/* Capacity Factor (all sources) */}
+                <div style={row}>
+                  <span style={rowL}><Tip k="Capacity Factor">Capacity Factor</Tip></span>
+                  <div style={rowR}>
+                    <input type="number" value={cfIn} onChange={e => setCfIn(e.target.value)}
+                      placeholder={Math.round(refCF * 100)} min="1" max="100" step="1" style={{...fi, width: 70}} />
+                    <span style={unit}>%</span>
+                  </div>
+                </div>
+
+                {/* Heat Rate — combustion only */}
+                {isCombustion && (
+                  <div style={row}>
+                    <span style={rowL}>Heat Rate</span>
+                    <div style={rowR}>
+                      <input type="number" value={heatRateBtu}
+                        onChange={e => setHeatRateBtu(Number(e.target.value) || 0)}
+                        min="1" step="0.1" style={{...fi, width: 90}} />
+                      <span style={unit}>MMBtu/MWh</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Divider */}
+                <div style={{ padding: "6px 18px 4px", fontSize: 10, fontWeight: 700,
+                  color: "#aaa", textTransform: "uppercase", letterSpacing: "0.08em",
+                  borderTop: "1px solid #f0f0f0", borderBottom: "1px solid #f0f0f0",
+                  background: "#fafafa" }}>
+                  Enter any one — model calculates the rest
+                </div>
+
+                {/* Box 1: Plant Capacity */}
+                <div style={row}>
+                  <div>
+                    <div style={rowL}>Plant Capacity</div>
+                    <div style={{ fontSize: 10, color: "#aaa" }}>{capHint}</div>
+                  </div>
+                  {dispIn('plant', plantCap, v => setPlCap(String(v)), capUnit)}
+                </div>
+
+                {/* Box 2: Expected Output */}
+                <div style={row}>
+                  <div>
+                    <div style={rowL}>Expected Output</div>
+                    <div style={{ fontSize: 10, color: "#aaa" }}>Plant Capacity × CF</div>
+                  </div>
+                  {dispIn('expOut', expOut, v => setPlCap(String(fromExpOut(v))), expUnit)}
+                </div>
+
+                {/* Box 3: CO₂ Produced */}
+                <div style={row}>
+                  <div>
+                    <div style={rowL}>CO₂ Produced</div>
+                    <div style={{ fontSize: 10, color: "#aaa" }}>{co2ProdHint}</div>
+                  </div>
+                  {dispIn('co2Prod', co2Prod, v => setPlCap(String(fromCO2Prod(v))), "t/yr")}
+                </div>
+
+                {/* Box 4: CO₂ Captured */}
+                <div style={{...row, borderBottom: "none"}}>
+                  <div>
+                    <div style={{...rowL, color: "#58b947"}}>CO₂ Captured</div>
+                    <div style={{ fontSize: 10, color: "#aaa" }}>CO₂ Produced × {crCustom}% capture rate</div>
+                  </div>
+                  {dispIn('co2Capt', co2Capt, v => setPlCap(String(fromCO2Capt(v))), "t/yr", true)}
+                </div>
+                <div style={sub}>CO₂ Captured feeds the LCOC model as $/t CO₂ captured.</div>
+              </>
+            );
+          })() : null}
         </div>
 
         <div style={sec}>

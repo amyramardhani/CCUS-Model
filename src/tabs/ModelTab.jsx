@@ -14,16 +14,19 @@ export default function ModelTab({
   use48C, itcPct, grantAmt,
   fedTax, stateTax, deprMethod, projLife,
   useFixedHurdle, debtPct, costDebt, costEquity, mode,
-  heatRateBtu, plantMW, plantCFpct, hasCombustion, derivedCO2
+  heatRateBtu, plantMW, plantCFpct, hasCombustion, derivedCO2,
+  lastInputBox
 }) {
   if (!res) return null;
 
   const v = res.vd;
 
-  const fc = (title, formula, note, color) => (
-    <div style={{ background: "#ffffff", borderRadius: 0, padding: "12px 14px", borderLeft: "3px solid " + color, border: "1px solid #e0e0e0" }}>
-      <div style={{ fontSize: 11.5, fontWeight: 700, color: "#444444", marginBottom: 6 }}>{title}</div>
-      <div style={{ fontFamily: "Courier New, monospace", fontSize: 11, color: "#666666", whiteSpace: "pre-wrap", lineHeight: 1.5, background: "#f0f0f0", borderRadius: 0, padding: "8px 10px", marginBottom: 6, border: "1px solid #e0e0e0" }}>{formula}</div>
+  const fc = (title, formula, note, color, highlight = false) => (
+    <div style={{ background: highlight ? "#fffbf0" : "#ffffff", borderRadius: 0, padding: "12px 14px", border: highlight ? "2px solid #f5a623" : "1px solid #e0e0e0", borderLeft: "3px solid " + (highlight ? "#f5a623" : color) }}>
+      <div style={{ fontSize: 11.5, fontWeight: 700, color: highlight ? "#c47d00" : "#444444", marginBottom: 6 }}>
+        {title}{highlight && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#f5a623", background: "#fff3cc", padding: "1px 5px", borderRadius: 3 }}>entered</span>}
+      </div>
+      <div style={{ fontFamily: "Courier New, monospace", fontSize: 11, color: "#666666", whiteSpace: "pre-wrap", lineHeight: 1.5, background: highlight ? "#fef9e7" : "#f0f0f0", borderRadius: 0, padding: "8px 10px", marginBottom: 6, border: "1px solid #e0e0e0" }}>{formula}</div>
       <div style={{ fontSize: 10, color: "#aaaaaa", lineHeight: 1.4 }}>{note}</div>
     </div>
   );
@@ -211,19 +214,144 @@ export default function ModelTab({
         </div>
         <div style={cd}>
           <h3 style={ch}>Scaling & Capacity</h3>
-          {fc("Scale Factor", "= (Capacity_ratio) ^ 0.6\n= (" + res.sR.toFixed(4) + ") ^ 0.6\n= " + res.cS.toFixed(4) + "×", "Six-tenths rule" + (!res.cust ? " (ref size, no scaling)" : ""), "#f68d2e")}
-          {fc("Project CO₂",
-            hasCombustion && derivedCO2 > 0
-              ? "= Plant_MW × CF × 8,760 × Heat_Rate × Emission_Factor\n= " + fm(plantMW, 0) + " MW × " + (plantCFpct / 100).toFixed(2) + " × 8,760 × " + heatRateBtu.toFixed(3) + " MMBtu/MWh × " + (EMIT_FACTORS[src] || 0).toFixed(5) + " t/MMBtu\n= " + fm(res.pCO2, 0) + " t/yr"
-              : res.cust && mode === "co2"
-                ? "= User input = " + fm(res.pCO2, 0) + " t/yr"
-                : "= Ref_CO₂ × (CF / Ref_CF)\n= " + fm(v ? v.rco : 0, 0) + " × (" + (res.cf * 100).toFixed(0) + "% / " + ((v ? v.cf : 0.85) * 100).toFixed(0) + "%)\n= " + fm(res.pCO2, 0) + " t/yr",
-            hasCombustion && derivedCO2 > 0
-              ? "Derived from plant heat rate × emission factor. Emission factor: " + (EMIT_FACTORS[src] || 0).toFixed(5) + " t CO₂/MMBtu (EPA AP-42)"
-              : "Annual CO₂ captured",
-            "#58a7af")}
+          {(() => {
+            const grossRef = (v ? v.rpc : 0) + (v ? (v.pw || 0) : 0);
+            const userVal  = res.sR * (hasCombustion ? grossRef : (v ? v.rpc : 0));
+            const refVal   = hasCombustion ? grossRef : (v ? v.rpc : 0);
+            const refUnit  = v ? v.rpu : "units";
+            if (!res.cust) {
+              return fc(
+                "Capacity Ratio (sR)",
+                "= Reference size (no custom plant capacity entered)\n= 1.0000× — no scaling applied",
+                "Enter a plant capacity in Production Parameters to scale costs.",
+                "#f68d2e"
+              );
+            }
+            if (hasCombustion) {
+              const pw = parseFloat((v ? (v.pw || 0) : 0).toFixed(2));
+              return fc(
+                "Capacity Ratio (sR)",
+                "= User Gross MW / NETL Reference Gross MW\n"
+                + "= " + userVal.toFixed(1) + " / (" + (v ? v.rpc : 0) + " net + " + pw + " MW CCS penalty)\n"
+                + "= " + userVal.toFixed(1) + " / " + refVal.toFixed(1) + " MW gross\n"
+                + "= " + res.sR.toFixed(4) + "×",
+                "Gross MW = full turbine output at 100% CF before CCS power draw. "
+                + "The CCS system consumes " + pw + " MW internally; the grid receives "
+                + (v ? v.rpc : 0) + " MW net at reference size.",
+                "#f68d2e"
+              );
+            }
+            return fc(
+              "Capacity Ratio (sR)",
+              "= User Plant Capacity / NETL Reference Capacity\n"
+              + "= " + userVal.toLocaleString('en-US', {maximumFractionDigits: 1}) + " / " + refVal.toLocaleString() + " " + refUnit + "\n"
+              + "= " + res.sR.toFixed(4) + "×",
+              "Reference plant: " + refVal.toLocaleString() + " " + refUnit + " (NETL 2018 baseline).",
+              "#f68d2e"
+            );
+          })()}
+          {fc("Scale Factor (cS)",
+            "= Capacity_Ratio ^ 0.6\n= " + res.sR.toFixed(4) + " ^ 0.6\n= " + res.cS.toFixed(4) + "×",
+            "Six-tenths rule: larger plants cost less per unit due to economies of scale." + (!res.cust ? " (ref size, factor = 1.0)" : ""),
+            "#f68d2e")}
+          {(() => {
+            const grossRef2 = (v ? v.rpc : 0) + (v ? (v.pw || 0) : 0);
+            const grossCap  = res.cust ? res.sR * (hasCombustion ? grossRef2 : (v ? v.rpc : 0)) : (hasCombustion ? grossRef2 : (v ? v.rpc : 0));
+            const cfPct     = (res.cf * 100).toFixed(1);
+            const refCfPct  = ((v ? v.cf : 0.85) * 100).toFixed(0);
+            const efT2      = EMIT_FACTORS[src] || 0;
+            const crDec2    = parseInt(cr) / 100;
+            const co2Prod2  = derivedCO2 > 0 ? derivedCO2 : (crDec2 > 0 ? res.pCO2 / crDec2 : 0);
+            return fc("Project CO₂ Captured",
+              hasCombustion && derivedCO2 > 0
+                ? "= Gross_MW × CF × 8,760 × HR × EF × Capture_Rate\n= " + grossCap.toFixed(1) + " MW × " + cfPct + "% × 8,760 × " + heatRateBtu.toFixed(3) + " MMBtu/MWh\n  × " + (efT2*1000).toFixed(2) + " kg/MMBtu ÷ 1,000 × " + (crDec2*100).toFixed(0) + "%\n= " + fm(res.pCO2, 0) + " t/yr"
+                : res.cust
+                  ? "= Ref_CO₂ × (Plant_Cap / Ref_Cap) × (CF / Ref_CF)\n= " + fm(v ? v.rco : 0, 0) + " × " + res.sR.toFixed(4) + " × (" + cfPct + "% / " + refCfPct + "%)\n= " + fm(res.pCO2, 0) + " t/yr"
+                  : "= Ref_CO₂ × (CF / Ref_CF)\n= " + fm(v ? v.rco : 0, 0) + " × (" + cfPct + "% / " + refCfPct + "%)\n= " + fm(res.pCO2, 0) + " t/yr",
+              "CO₂ captured annually — the LCOC denominator ($/t CO₂ captured).",
+              "#58a7af");
+          })()}
         </div>
       </div>
+      {/* ─── PRODUCTION PARAMETERS BREAKDOWN ─── */}
+      {(() => {
+        const crDec   = parseInt(cr) / 100;
+        const cfDec   = res.cf;
+        const refCF   = v ? v.cf : 0.85;
+        const efT     = EMIT_FACTORS[src] || 0;
+        const grossRef = v ? (v.rpc + (v.pw || 0)) : 0;
+        const pw      = parseFloat((v ? (v.pw || 0) : 0).toFixed(2));
+
+        let plantCapVal, expOutVal, co2ProdVal, co2CaptVal;
+        let plantCapFormula, expOutFormula, co2ProdFormula, co2CaptFormula;
+        let plantCapNote, expOutNote, co2ProdNote, co2CaptNote;
+        let plantCapUnit, expOutUnit;
+
+        if (hasCombustion) {
+          plantCapVal  = res.sR * grossRef;
+          expOutVal    = plantCapVal * cfDec * 8760;
+          co2ProdVal   = derivedCO2 > 0 ? derivedCO2 : (crDec > 0 ? res.pCO2 / crDec : 0);
+          co2CaptVal   = res.pCO2;
+          plantCapUnit = "MW gross";
+          expOutUnit   = "MWh/yr";
+
+          plantCapFormula = res.cust
+            ? "= CO₂ Produced ÷ (CF × 8,760 × HR × EF)\n= " + fm(co2ProdVal, 0) + "\n  ÷ (" + (cfDec * 100).toFixed(1) + "% × 8,760 × " + heatRateBtu.toFixed(3) + " × " + (efT * 1000).toFixed(2) + " ÷ 1,000)\n= " + plantCapVal.toFixed(1) + " MW gross"
+            : "= NETL reference\n= (" + (v ? v.rpc : 0) + " net + " + pw + " CCS penalty)\n= " + grossRef.toFixed(1) + " MW gross";
+          plantCapNote = res.cust
+            ? "Gross nameplate capacity (before CCS draws " + pw + " MW). Grid receives " + (plantCapVal - pw).toFixed(1) + " MW net."
+            : "No custom capacity entered — using NETL reference size.";
+
+          expOutFormula = "= Plant Cap × CF × 8,760\n= " + plantCapVal.toFixed(1) + " × " + (cfDec * 100).toFixed(1) + "% × 8,760\n= " + fm(expOutVal, 0) + " MWh/yr";
+          expOutNote    = "Annual gross energy output at " + (cfDec * 100).toFixed(1) + "% capacity factor.";
+
+          co2ProdFormula = derivedCO2 > 0
+            ? "= Expected Output × Heat Rate × Emission Factor\n= " + fm(expOutVal, 0) + " MWh/yr\n  × " + heatRateBtu.toFixed(3) + " MMBtu/MWh\n  × " + (efT * 1000).toFixed(2) + " kg CO₂/MMBtu ÷ 1,000\n= " + fm(co2ProdVal, 0) + " t/yr"
+            : "= Ref_CO₂ × sR / Capture_Rate\n= " + fm(v ? v.rco : 0, 0) + " × " + res.sR.toFixed(4) + " / " + crDec.toFixed(2) + "\n= " + fm(co2ProdVal, 0) + " t/yr";
+          co2ProdNote = "Total CO₂ produced by combustion before any capture. Emission factor: " + (efT * 1000).toFixed(2) + " kg/MMBtu (EPA AP-42).";
+
+          co2CaptFormula = "= CO₂ Produced × Capture Rate\n= " + fm(co2ProdVal, 0) + " t/yr × " + (crDec * 100).toFixed(0) + "%\n= " + fm(co2CaptVal, 0) + " t/yr";
+          co2CaptNote = "CO₂ captured and sent to storage or utilization. Used as the LCOC denominator ($/t CO₂ captured).";
+
+        } else {
+          const refCO2Prod = v ? v.rco / crDec : 0;
+          plantCapVal  = res.sR * (v ? v.rpc : 0);
+          expOutVal    = plantCapVal * cfDec;
+          co2ProdVal   = refCF > 0 ? expOutVal * refCO2Prod / ((v ? v.rpc : 1) * refCF) : 0;
+          co2CaptVal   = res.pCO2;
+          plantCapUnit = v ? v.rpu : "units";
+          expOutUnit   = v ? v.rpu : "units";
+
+          plantCapFormula = res.cust
+            ? "= CO₂ Produced × (Ref_Cap × Ref_CF) ÷ (Ref_CO₂_Prod × CF)\n= " + fm(co2ProdVal, 0) + " × (" + (v ? v.rpc : 0).toLocaleString() + " × " + (refCF * 100).toFixed(1) + "%) ÷ (" + fm(refCO2Prod, 0) + " × " + (cfDec * 100).toFixed(1) + "%)\n= " + plantCapVal.toLocaleString('en-US', {maximumFractionDigits: 1}) + " " + plantCapUnit
+            : "= NETL reference\n= " + (v ? v.rpc : 0).toLocaleString() + " " + plantCapUnit;
+          plantCapNote = res.cust ? "Capacity in native source units (back-calculated from entered values)." : "No custom capacity — using NETL reference size.";
+
+          expOutFormula = "= Plant Cap × CF\n= " + plantCapVal.toLocaleString('en-US', {maximumFractionDigits: 1}) + " × " + (cfDec * 100).toFixed(1) + "%\n= " + expOutVal.toLocaleString('en-US', {maximumFractionDigits: 1}) + " " + expOutUnit;
+          expOutNote    = "Effective annual throughput at " + (cfDec * 100).toFixed(1) + "% utilization.";
+
+          co2ProdFormula = "= Ref_CO₂_Produced × (Plant_Cap / Ref_Cap) × (CF / Ref_CF)\n= " + fm(refCO2Prod, 0) + " × " + res.sR.toFixed(4) + " × (" + (cfDec * 100).toFixed(1) + "% / " + (refCF * 100).toFixed(1) + "%)\n= " + fm(co2ProdVal, 0) + " t/yr";
+          co2ProdNote = "Scaled from NETL reference. Ref_CO₂_Produced = Ref_CO₂_Captured / Capture_Rate = " + fm(v ? v.rco : 0, 0) + " / " + crDec.toFixed(2) + " = " + fm(refCO2Prod, 0) + " t/yr.";
+
+          co2CaptFormula = "= CO₂ Produced × Capture Rate\n= " + fm(co2ProdVal, 0) + " × " + (crDec * 100).toFixed(0) + "%\n= " + fm(co2CaptVal, 0) + " t/yr";
+          co2CaptNote = "CO₂ captured. Used as the LCOC denominator ($/t CO₂ captured).";
+        }
+
+        return (
+          <div style={{ marginTop: 10, marginBottom: 4 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 8, paddingLeft: 2 }}>
+              Production Parameters
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10 }}>
+              {fc("① Plant Capacity", plantCapFormula, plantCapNote + "\n\nUnit: " + plantCapUnit, "#888888", lastInputBox === 'plant')}
+              {fc("② Expected Output", expOutFormula, expOutNote + "\n\nUnit: " + expOutUnit, "#58a7af", lastInputBox === 'expOut')}
+              {fc("③ CO₂ Produced", co2ProdFormula, co2ProdNote, "#f68d2e", lastInputBox === 'co2Prod')}
+              {fc("④ CO₂ Captured", co2CaptFormula, co2CaptNote, "#58b947", lastInputBox === 'co2Capt')}
+            </div>
+          </div>
+        );
+      })()}
+
       {conn(null, "Stage 2: CAPEX and Stage 3: OPEX", "#888888")}
 
       {arrow()}

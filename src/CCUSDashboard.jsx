@@ -38,13 +38,14 @@ export default function CCUSDashboard() {
   const [heatRateBtu, setHeatRateBtu] = useState(6.722);
   const isPowerPlant = SC[src] && SC[src].cat === "Power";
   const hasCombustion = !!(EMIT_FACTORS[src]);
-  // derivedCO2: only active for combustion sources in plant-cap mode.
-  // Uses user's plCap entry (MW) if provided, else falls back to PP_DEFAULTS plantMW.
-  // Non-combustion sources and combustion sources in CO₂ mode use standard co2Cap/plCap logic.
-  const plantCapForDeriv = hasCombustion && mode === "plant"
-    ? (parseFloat(plCap) > 0 ? parseFloat(plCap) : plantMW)
-    : 0;
-  const plantCFForDeriv = parseFloat(cfIn) > 0 && parseFloat(cfIn) <= 100 ? parseFloat(cfIn) : plantCFpct;
+  // derivedCO2: gross MW × CF × 8,760 × HR × EF — same formula as the 4-box UI.
+  // Using gross MW directly keeps the chain invertible: any box back-calcs to plCap,
+  // and derivedCO2 reconstructs the same CO₂ value the user entered.
+  const _sd = SC[src];
+  const _refCF = _sd?.cf || 0.85;
+  const _grossUserCap = parseFloat(plCap) > 0 ? parseFloat(plCap) : 0;
+  const plantCapForDeriv = hasCombustion ? _grossUserCap : 0;
+  const plantCFForDeriv = parseFloat(cfIn) > 0 && parseFloat(cfIn) <= 100 ? parseFloat(cfIn) : (_refCF * 100);
   const derivedCO2 = plantCapForDeriv > 0
     ? plantCapForDeriv * (plantCFForDeriv / 100) * 8760 * heatRateBtu * (EMIT_FACTORS[src] || 0)
     : 0;
@@ -82,6 +83,7 @@ export default function CCUSDashboard() {
   const [calcfaRate, setCalcfaRate] = useState(50);
   const [grantAmt, setGrantAmt] = useState(0);
   const [hovSt2, setHovSt2] = useState(null);
+  const [lastInputBox, setLastInputBox] = useState(null); // 'plant'|'expOut'|'co2Prod'|'co2Capt'
 
   /* Voluntary Carbon Markets */
   const [useCDRCredit, setUseCDRCredit] = useState(false);
@@ -204,10 +206,15 @@ export default function CCUSDashboard() {
     const isNGCC = src === "NGCC F-Frame" || src === "NGCC H-Frame";
     let pCO2 = refCO2 * (cf / refCF), sR = 1.0, cust = false;
     const uC = parseFloat(co2Cap), uP = parseFloat(plCap);
-    if (derivedCO2 > 0) { pCO2 = derivedCO2; sR = (pCO2 / (cf / refCF)) / refCO2; cust = true; }
-    else if (mode === "co2" && uC > 0) { pCO2 = uC; sR = (pCO2 / (cf / refCF)) / refCO2; cust = true; }
-    else if (mode === "plant" && uP > 0) { sR = uP / vd.rpc; pCO2 = refCO2 * sR * (cf / refCF); cust = true; }
-    else if (cfCustom) { cust = true; }
+    if (EMIT_FACTORS[src]) {
+      // Combustion sources: plant-cap driven. plCap is gross MW (nameplate).
+      if (uP > 0) { sR = uP / (vd.rpc + vd.pw); cust = true; }
+      const captureRate = parseFloat(cr) / 100;
+      pCO2 = derivedCO2 > 0 ? derivedCO2 * captureRate : refCO2 * sR * (cf / refCF);
+    } else if (uP > 0) {
+      // Non-combustion: 4-box UI always writes to plCap (native source units)
+      sR = uP / vd.rpc; pCO2 = refCO2 * sR * (cf / refCF); cust = true;
+    } else if (cfCustom) { cust = true; }
     const tF = TECH[tech] || TECH.amine;
     const cR = (CEPCI[yr] || CEPCI[2026]) / CEPCI[2018];
     const lR = (LF[st] ? LF[st].f : 1) / (LF[vd.bs] ? LF[vd.bs].f : 0.97);
@@ -249,7 +256,7 @@ export default function CCUSDashboard() {
       total: capC + sFO + sVO + pPt + sFL, ccf: useCCF, baseCCF: vd.ccf,
       wacc: calcWACC, discountRate, tech: tF
     };
-  }, [src, crCustom, bt, tech, st, yr, mode, co2Cap, plCap, pp, gp, cfIn, debtPct, costDebt, costEquity, useFixedHurdle, fixedHurdle, projLife, plantMW, plantCFpct, heatRateBtu, derivedCO2]);
+  }, [src, crCustom, bt, tech, st, yr, plCap, pp, gp, cfIn, debtPct, costDebt, costEquity, useFixedHurdle, fixedHurdle, projLife, plantMW, plantCFpct, heatRateBtu, derivedCO2]);
 
   const pie = res ? [
     { name: "Capital", value: res.capC, color: "#58b947" },
@@ -323,6 +330,7 @@ export default function CCUSDashboard() {
             plantMW={plantMW} setPlantMW={setPlantMW} plantCFpct={plantCFpct} setPlantCFpct={setPlantCFpct}
             heatRateBtu={heatRateBtu} setHeatRateBtu={setHeatRateBtu} derivedCO2={derivedCO2}
             isPowerPlant={isPowerPlant} hasCombustion={hasCombustion}
+            setLastInputBox={setLastInputBox}
             use45Q={use45Q} setUse45Q={setUse45Q} q45Duration={q45Duration} setQ45Duration={setQ45Duration}
             q45Inflation={q45Inflation} setQ45Inflation={setQ45Inflation} q45StartYear={q45StartYear} setQ45StartYear={setQ45StartYear}
             use48C={use48C} setUse48C={setUse48C} itcPct={itcPct} setItcPct={setItcPct}
@@ -363,6 +371,7 @@ export default function CCUSDashboard() {
             fixedHurdle={fixedHurdle} mode={mode}
             heatRateBtu={heatRateBtu} plantMW={plantMW} plantCFpct={plantCFpct}
             hasCombustion={hasCombustion} derivedCO2={derivedCO2}
+            lastInputBox={lastInputBox}
           />
         )}
 

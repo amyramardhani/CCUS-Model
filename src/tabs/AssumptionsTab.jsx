@@ -592,24 +592,34 @@ export default function AssumptionsTab({ res, src, st, yr, tech, codYear, projLi
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr>
               <th style={aTh}>Source</th>
-              <th style={{...aTh, textAlign:"right"}}>Emission Factor</th>
-              <th style={aTh}>Units</th>
-              <th style={aTh}>Basis</th>
-              <th style={aTh}>Used For</th>
+              <th style={{...aTh, textAlign:"right"}}>t CO₂/MMBtu</th>
+              <th style={{...aTh, textAlign:"right"}}>kg CO₂/MMBtu</th>
+              <th style={{...aTh, textAlign:"right"}}>lbs CO₂/MMBtu</th>
+              <th style={aTh}>Heating Basis</th>
+              <th style={aTh}>Reference</th>
             </tr></thead>
             <tbody>
               {Object.entries(EMIT_FACTORS).map(([s, f]) => (
                 <tr key={s} style={{ borderBottom: "1px solid #f0f0f0" }}>
                   <td style={{...aTd, fontWeight: 600}}>{s}</td>
-                  <td style={aTdR}>{f.toFixed(5)}</td>
-                  <td style={aTdG}>t CO₂/MMBtu</td>
-                  <td style={aTdG}>HHV (Higher Heating Value)</td>
-                  <td style={aTdG}>CO₂ output = Heat Rate × Fuel Use × Emission Factor × (1 − Capture Rate)</td>
+                  <td style={aTdR}>{f > 0 ? f.toFixed(5) : "—"}</td>
+                  <td style={{...aTdR, fontWeight: 600, color: "#333"}}>{f > 0 ? (f * 1000).toFixed(2) : "0 (biogenic)"}</td>
+                  <td style={aTdR}>{f > 0 ? (f * 2204.62).toFixed(2) : "—"}</td>
+                  <td style={aTdG}>HHV</td>
+                  <td style={aTdG}>
+                    {s === "Biomass" ? "Biogenic — excluded from fossil CO₂ accounting" :
+                     s.startsWith("NGCC") ? "EPA AP-42 §1.4 — Natural Gas Combustion" :
+                     "EPA AP-42 §1.1 — Bituminous/Subbituminous Coal Blend"}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <div style={noteStyle}>Source: EPA AP-42 + IPCC 2006 Guidelines. Natural gas: 0.05306 t CO₂/MMBtu (HHV). Coal Sub-C: 0.09552 t CO₂/MMBtu (HHV). Biomass: 0 (biogenic carbon, excluded from fossil CO₂ accounting). Used when Heat Rate is specified (NGCC and Coal sources).</div>
+          <div style={noteStyle}>
+            Conversion: 1 t CO₂/MMBtu = 1,000 kg CO₂/MMBtu = 2,204.62 lbs CO₂/MMBtu. All factors on a Higher Heating Value (HHV) basis.
+            Used in plant-cap mode: CO₂ (t/yr) = Net MW × CF × 8,760 hr/yr × Heat Rate (MMBtu/MWh) × Emission Factor (t CO₂/MMBtu).
+            Biomass CO₂ treated as zero under biogenic carbon accounting (IPCC 2006 Guidelines, Vol. 2).
+          </div>
         </div>
       </div>
 
