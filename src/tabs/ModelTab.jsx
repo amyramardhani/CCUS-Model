@@ -122,7 +122,7 @@ export default function ModelTab({
               {nd("Elec Price", "$" + pp + "/MWh", "#b83a4b", 85)}
               {res.hasFuel && nd("Gas Price", "Strip", "#93348f", 85)}
               {nd("CF", (res.cf * 100).toFixed(0) + "%", "#58a7af", 55)}
-              {hasCombustion && nd("Heat Rate", fm(heatRateBtu, 0) + " Btu/kWh", "#b83a4b", 100, (EMIT_FACTORS[src] || 0).toFixed(5) + " t CO₂/MMBtu")}
+              {hasCombustion && nd("Heat Rate", heatRateBtu.toFixed(3) + " MMBtu/MWh", "#b83a4b", 110, (EMIT_FACTORS[src] || 0).toFixed(5) + " t CO₂/MMBtu")}
             </div>
             {vline(8)}
             {arrowDown("#aaaaaa")}
@@ -214,7 +214,7 @@ export default function ModelTab({
           {fc("Scale Factor", "= (Capacity_ratio) ^ 0.6\n= (" + res.sR.toFixed(4) + ") ^ 0.6\n= " + res.cS.toFixed(4) + "×", "Six-tenths rule" + (!res.cust ? " (ref size, no scaling)" : ""), "#f68d2e")}
           {fc("Project CO₂",
             hasCombustion && derivedCO2 > 0
-              ? "= Plant_MW × CF × 8,760 × (Heat_Rate / 1,000,000) × Emission_Factor\n= " + fm(plantMW, 0) + " MW × " + (plantCFpct / 100).toFixed(2) + " × 8,760 × (" + fm(heatRateBtu, 0) + " / 1,000,000) × " + (EMIT_FACTORS[src] || 0).toFixed(5) + "\n= " + fm(res.pCO2, 0) + " t/yr"
+              ? "= Plant_MW × CF × 8,760 × Heat_Rate × Emission_Factor\n= " + fm(plantMW, 0) + " MW × " + (plantCFpct / 100).toFixed(2) + " × 8,760 × " + heatRateBtu.toFixed(3) + " MMBtu/MWh × " + (EMIT_FACTORS[src] || 0).toFixed(5) + " t/MMBtu\n= " + fm(res.pCO2, 0) + " t/yr"
               : res.cust && mode === "co2"
                 ? "= User input = " + fm(res.pCO2, 0) + " t/yr"
                 : "= Ref_CO₂ × (CF / Ref_CF)\n= " + fm(v ? v.rco : 0, 0) + " × (" + (res.cf * 100).toFixed(0) + "% / " + ((v ? v.cf : 0.85) * 100).toFixed(0) + "%)\n= " + fm(res.pCO2, 0) + " t/yr",
@@ -636,7 +636,9 @@ export default function ModelTab({
             </div>
             <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
               {[
-                { l: "Construction", v: `${constructionYears} yr`, c: "#f68d2e" },
+                { l: "Construction", v: `${constructionYears} yr (${capexDistStr})`, c: "#f68d2e" },
+                { l: "COD", v: `${codYear}`, c: "#58a7af" },
+                { l: "Op. End", v: `${codYear + projectLife}`, c: "#58a7af" },
                 { l: "CAPEX (TOC)", v: `${fd(capex/1e6,1)}M`, c: "#93348f" },
                 { l: "TASC", v: `${fd(totalCapex/1e6,1)}M (${tascTocFactor.toFixed(3)}×)`, c: "#b83a4b" },
                 { l: "Life", v: `${projectLife} yr`, c: "#58b947" },

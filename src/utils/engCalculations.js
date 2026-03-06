@@ -2,11 +2,11 @@ import { SC } from '../constants';
 
 // Power plant capacity / emission defaults by source — used to pre-populate plant-size inputs
 export const PP_DEFAULTS = {
-  "NGCC F-Frame":   { mw: 641,    cf: 57, hr: 6722 },
-  "NGCC H-Frame":   { mw: 878,    cf: 60, hr: 6333 },
-  "Coal SC":        { mw: 550,    cf: 47, hr: 8800  },
-  "Coal Sub-C":     { mw: 500,    cf: 47, hr: 10000 },
-  "Biomass":        { mw: 50,     cf: 80, hr: 13500 },
+  "NGCC F-Frame":   { mw: 641,    cf: 57, hr: 6.722 },
+  "NGCC H-Frame":   { mw: 878,    cf: 60, hr: 6.333 },
+  "Coal SC":        { mw: 550,    cf: 47, hr: 8.800 },
+  "Coal Sub-C":     { mw: 500,    cf: 47, hr: 10.000 },
+  "Biomass":        { mw: 50,     cf: 80, hr: 13.500 },
   "NG Processing":  { mw: 330,    cf: 85, hr: 0 },
   "Ammonia":        { mw: 394000, cf: 85, hr: 0 },
   "Ethylene Oxide": { mw: 364500, cf: 85, hr: 0 },

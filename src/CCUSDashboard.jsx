@@ -25,16 +25,17 @@ export default function CCUSDashboard() {
   const [plCap, setPlCap] = useState("");
   const [pp, setPp] = useState(toMWh("TX"));
   const [ppO, setPpO] = useState(false);
-  const [gp, setGp] = useState(hhStripPrice(2029, "TX"));
+  const [gp, setGp] = useState(hhStripPrice(2026, "TX"));
   const [gpO, setGpO] = useState(false);
-  const [codYear, setCodYear] = useState(2029);
+  const [codYear, setCodYear] = useState(2026); // Ammonia default: yr(2025) + 1 construction yr
+  const [codYearOverride, setCodYearOverride] = useState(false);
   const [cfIn, setCfIn] = useState("");
   const [tab, setTab] = useState("io");
 
   /* Power Plant Parameters */
   const [plantMW, setPlantMW] = useState(500);
   const [plantCFpct, setPlantCFpct] = useState(57);
-  const [heatRateBtu, setHeatRateBtu] = useState(6722);
+  const [heatRateBtu, setHeatRateBtu] = useState(6.722);
   const isPowerPlant = SC[src] && SC[src].cat === "Power";
   const hasCombustion = !!(EMIT_FACTORS[src]);
   // derivedCO2: only active for combustion sources in plant-cap mode.
@@ -45,7 +46,7 @@ export default function CCUSDashboard() {
     : 0;
   const plantCFForDeriv = parseFloat(cfIn) > 0 && parseFloat(cfIn) <= 100 ? parseFloat(cfIn) : plantCFpct;
   const derivedCO2 = plantCapForDeriv > 0
-    ? plantCapForDeriv * (plantCFForDeriv / 100) * 8760 * (heatRateBtu / 1e6) * (EMIT_FACTORS[src] || 0)
+    ? plantCapForDeriv * (plantCFForDeriv / 100) * 8760 * heatRateBtu * (EMIT_FACTORS[src] || 0)
     : 0;
 
   /* Capital Structure */
@@ -164,6 +165,12 @@ export default function CCUSDashboard() {
   useEffect(() => { if (!ppO) { setPp(toMWh(st)); } }, [st, ppO]);
   useEffect(() => { if (!gpO) { setGp(hhStripPrice(codYear, st)); } }, [st, codYear, gpO]);
   useEffect(() => { setQ45StartYear(codYear); }, [codYear]);
+  useEffect(() => {
+    if (!codYearOverride) {
+      const netl = NETL_FIN[src] || NETL_DEFAULT;
+      setCodYear(yr + netl.constructionYrs);
+    }
+  }, [src, yr, codYearOverride]);
 
   const cr = `${crCustom}%`;
 
@@ -183,6 +190,7 @@ export default function CCUSDashboard() {
       setPlantCFpct(PP_DEFAULTS[ns].cf);
       setHeatRateBtu(PP_DEFAULTS[ns].hr);
     }
+    setCodYearOverride(false);
   }, [tech]);
 
   const res = useMemo(() => {
@@ -306,11 +314,11 @@ export default function CCUSDashboard() {
         {/* Tab content */}
         {tab === "io" && (
           <SummaryTab
-            res={res} src={src} setSrc={chSrc} cr={cr} crCustom={crCustom} setCrCustom={setCrCustom}
+            res={res} src={src} chSrc={chSrc} cr={cr} crCustom={crCustom} setCrCustom={setCrCustom}
             bt={bt} setBt={setBt} tech={tech} setTech={setTech} st={st} setSt={setSt}
             yr={yr} setYr={setYr} mode={mode} setMode={setMode} co2Cap={co2Cap} setCo2Cap={setCo2Cap}
             plCap={plCap} setPlCap={setPlCap} pp={pp} setPp={setPp} ppO={ppO} setPpO={setPpO}
-            gp={gp} setGp={setGp} gpO={gpO} setGpO={setGpO} codYear={codYear} setCodYear={setCodYear}
+            gp={gp} setGp={setGp} gpO={gpO} setGpO={setGpO} codYear={codYear} setCodYear={setCodYear} codYearOverride={codYearOverride} setCodYearOverride={setCodYearOverride}
             cfIn={cfIn} setCfIn={setCfIn}
             plantMW={plantMW} setPlantMW={setPlantMW} plantCFpct={plantCFpct} setPlantCFpct={setPlantCFpct}
             heatRateBtu={heatRateBtu} setHeatRateBtu={setHeatRateBtu} derivedCO2={derivedCO2}
@@ -396,7 +404,7 @@ export default function CCUSDashboard() {
         )}
 
         {tab === "assumptions" && (
-          <AssumptionsTab res={res} src={src} st={st} yr={yr} tech={tech} />
+          <AssumptionsTab res={res} src={src} st={st} yr={yr} tech={tech} codYear={codYear} projLife={projLife} />
         )}
 
         {tab === "batch" && (

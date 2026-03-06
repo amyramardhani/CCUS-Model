@@ -153,7 +153,7 @@ const SOURCES = [
   }
 ];
 
-export default function AssumptionsTab({ res, src, st, yr, tech }) {
+export default function AssumptionsTab({ res, src, st, yr, tech, codYear, projLife }) {
   const aBox = { ...sec, marginBottom: 14 };
   const aHdr = { ...secH, borderLeft: "3px solid #888888" };
   const aTh = { padding: "6px 10px", fontSize: 10, fontWeight: 700, color: "#888888", textTransform: "uppercase", textAlign: "left", borderBottom: "2px solid #e0e0e0" };
@@ -296,21 +296,31 @@ export default function AssumptionsTab({ res, src, st, yr, tech }) {
                 <th style={{...aTh, textAlign:"right"}}>CCF</th>
                 <th style={{...aTh, textAlign:"right"}}>TASC/TOC</th>
                 <th style={{...aTh, textAlign:"right"}}>Constr. Yrs</th>
+                <th style={{...aTh, textAlign:"right"}}>CAPEX Schedule</th>
+                <th style={{...aTh, textAlign:"right"}}>COD (est.)</th>
                 <th style={{...aTh, textAlign:"right"}}>Proj. Life</th>
+                <th style={{...aTh, textAlign:"right"}}>Op. End (est.)</th>
               </tr></thead>
               <tbody>
-                {Object.entries(NETL_FIN).map(([name, f]) => (
-                  <tr key={name} style={{ background: name === src ? "#f0faf0" : "transparent" }}>
-                    <td style={{...aTd, fontWeight: name === src ? 700 : 400}}>{name}{name === src && <span style={{...srcTag, background:"#e8f5e9", color:"#4aa63b"}}> ← current</span>}</td>
+                {Object.entries(NETL_FIN).map(([name, f]) => {
+                  const estCOD = yr + f.constructionYrs;
+                  const estEnd = estCOD + f.projectLife;
+                  const isCurrent = name === src;
+                  return (
+                  <tr key={name} style={{ background: isCurrent ? "#f0faf0" : "transparent" }}>
+                    <td style={{...aTd, fontWeight: isCurrent ? 700 : 400}}>{name}{isCurrent && <span style={{...srcTag, background:"#e8f5e9", color:"#4aa63b"}}> ← current</span>}</td>
                     <td style={aTdR}>{f.debtPct}%</td>
                     <td style={aTdR}>{f.costDebt.toFixed(2)}%</td>
                     <td style={aTdR}>{f.roe.toFixed(2)}%</td>
                     <td style={{...aTdR, color:"#58a7af"}}>{(f.ccf*100).toFixed(2)}%</td>
                     <td style={aTdR}>{f.tascToc.toFixed(3)}×</td>
                     <td style={aTdR}>{f.constructionYrs} yr</td>
+                    <td style={{...aTdR, fontSize:9, color:"#888888"}}>{f.capexDist.map((d,i)=>`Y${i+1}:${(d*100).toFixed(0)}%`).join(" / ")}</td>
+                    <td style={{...aTdR, fontWeight: isCurrent ? 700 : 400, color: isCurrent ? "#58b947" : "#444444"}}>{isCurrent ? codYear : estCOD}</td>
                     <td style={aTdR}>{f.projectLife} yr</td>
-                  </tr>
-                ))}
+                    <td style={{...aTdR, color:"#888888"}}>{isCurrent ? (codYear + (projLife ?? f.projectLife)) : estEnd}</td>
+                  </tr>);
+                })}
               </tbody>
             </table>
             <div style={noteStyle}>Source: NETL engineering cost reports. ROE = Return on Equity (levered). CCF = Capital Charge Factor incorporating cost of capital, depreciation, tax, and insurance. Highlighted row = currently selected source.</div>

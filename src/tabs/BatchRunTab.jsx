@@ -238,7 +238,7 @@ export default function BatchRunTab({
                   "CO2 Emissions (tpa)",
                   "Plant Capacity",
                   "Plant CF (%)",
-                  "Heat Rate (Btu/kWh)",
+                  "Heat Rate (MMBtu/MWh)",
                   "Notes"
                 ];
                 // Description row (row 2) — grayed out guide text
@@ -249,7 +249,7 @@ export default function BatchRunTab({
                   "Annual CO₂ captured in tonnes/yr. Leave blank to use model reference.",
                   "Plant output in the source's native units (MW, MMSCFD, t/yr, etc.). Optional.",
                   "Capacity factor as a percent (1–100). Default applied from Model Settings if blank.",
-                  "Heat rate in Btu/kWh — only needed for NGCC and Coal sources. Leave blank otherwise.",
+                  "Heat rate in MMBtu/MWh — only needed for NGCC and Coal sources. Leave blank otherwise.",
                   "Free text notes — not used in calculations"
                 ];
                 const ws1 = XLSX.utils.aoa_to_sheet([headers, descRow]);
@@ -305,7 +305,7 @@ export default function BatchRunTab({
                   { Field: "CO2 Emissions (tpa)",     Required: "Recommended","Data Type": "Number",        "Valid Values / Range": "> 0 tonnes/yr",                              "Used In Model": "Sets project scale for cost calculation. If blank, model uses NETL reference CO₂ for the source." },
                   { Field: "Plant Capacity",          Required: "No",         "Data Type": "Number",        "Valid Values / Range": "In the source's native units (MW, MMSCFD, t/yr)",  "Used In Model": "Alternative to CO₂ input — used if CO₂ column is blank. Scaling applies either way." },
                   { Field: "Plant CF (%)",            Required: "No",         "Data Type": "Number (1–100)","Valid Values / Range": "1 to 100 (percent)",                         "Used In Model": "Capacity factor — fraction of calendar hours operating. Default from Model Settings (typically 85%)." },
-                  { Field: "Heat Rate (Btu/kWh)",     Required: "Power only", "Data Type": "Number",        "Valid Values / Range": "NGCC: ~6,500–7,500 / Coal: ~8,500–10,000",  "Used In Model": "Required for NGCC F-Frame, NGCC H-Frame, Coal SC. Used to derive CO₂ from fuel combustion." },
+                  { Field: "Heat Rate (MMBtu/MWh)",     Required: "Power only", "Data Type": "Number",        "Valid Values / Range": "NGCC: ~6.0–7.5 / Coal: ~8.5–10.5",          "Used In Model": "Required for NGCC F-Frame, NGCC H-Frame, Coal SC. Used to derive CO₂ from fuel combustion." },
                   { Field: "Notes",                   Required: "No",         "Data Type": "Text",          "Valid Values / Range": "Any text",                                   "Used In Model": "Not used in calculations — pass-through to results" },
                 ];
                 const ws4 = XLSX.utils.json_to_sheet(fieldGuide);
@@ -368,7 +368,7 @@ export default function BatchRunTab({
                 { key: "co2", label: "CO2 Emissions (tpa)", required: false },
                 { key: "plantCap", label: "Plant Capacity", required: false },
                 { key: "plantCF", label: "Plant Capacity Factor (%)", required: false },
-                { key: "heatRate", label: "Heat Rate (Btu/kWh)", required: false },
+                { key: "heatRate", label: "Heat Rate (MMBtu/MWh)", required: false },
               ].map(f => (
                 <div key={f.key} style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ fontSize: 12, fontWeight: 600, color: "#333", minWidth: 160 }}>{f.label} {f.required && <span style={{ color: "#b83a4b" }}>*</span>}</span>

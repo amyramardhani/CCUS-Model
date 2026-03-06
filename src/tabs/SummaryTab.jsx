@@ -1,10 +1,10 @@
 import Tip from '../components/Tip';
-import { SC, TECH, LF, CEPCI, CX_COLORS, CDR_TYPES, AVOID_TYPES, EMIT_FACTORS, BASE_GP, HUB_BASIS, HUB_NAME, MACRS, EIA } from '../constants';
+import { SC, TECH, LF, CEPCI, CX_COLORS, CDR_TYPES, AVOID_TYPES, EMIT_FACTORS, BASE_GP, HUB_BASIS, HUB_NAME, MACRS, EIA, NETL_FIN, NETL_DEFAULT } from '../constants';
 import { fm, fd, toMWh, hhBase, hhStripPrice, bestCreditType } from '../utils/helpers';
 import { sec, secH, row, rowL, rowR, fi, fSel, unit, sub, cd, ch, thd } from '../utils/styles';
 
 export default function SummaryTab({
-  src, crCustom, bt, tech, st, yr, mode, co2Cap, plCap, pp, ppO, gp, gpO, codYear, cfIn,
+  src, crCustom, bt, tech, st, yr, mode, co2Cap, plCap, pp, ppO, gp, gpO, codYear, codYearOverride, cfIn,
   plantMW, plantCFpct, heatRateBtu, derivedCO2,
   debtPct, costDebt, costEquity, useFixedHurdle, fixedHurdle, capStructOverride, projLife, projLifeOverride,
   fedTax, stateTax, stateTaxOverride, deprMethod, bonusDepr, bonusDeprPct,
@@ -12,7 +12,7 @@ export default function SummaryTab({
   useCDRCredit, cdrCreditType, cdrCreditRate, useAvoidCredit, avoidCreditType, avoidCreditRate, vcmDuration,
   res,
   chSrc, setCrCustom, setBt, setTech, setSt, setYr, setMode, setCo2Cap, setPlCap,
-  setPp, setPpO, setGp, setGpO, setCodYear, setCfIn,
+  setPp, setPpO, setGp, setGpO, setCodYear, setCodYearOverride, setCfIn,
   setPlantMW, setPlantCFpct, setHeatRateBtu,
   setDebtPct, setCostDebt, setCostEquity, setUseFixedHurdle, setFixedHurdle, setCapStructOverride,
   setProjLife, setProjLifeOverride,
@@ -40,11 +40,11 @@ export default function SummaryTab({
       <div style={{ position: "sticky", top: 16 }}>
         <div style={{display:"flex",justifyContent:"flex-end",marginBottom:4}}>
           <button onClick={()=>{
-            chSrc("NGCC F-Frame"); setCr(90); setBt("MEA"); setMode("co2"); setCo2Cap(""); setPlCap(""); setCfIn("");
+            chSrc("NGCC F-Frame"); setCrCustom(90); setBt("Retrofit"); setMode("co2"); setCo2Cap(""); setPlCap(""); setCfIn("");
             setTech("amine"); setYr(2026); setSt("TX"); setPp(toMWh("TX")); setPpO(false);
             setGp(hhStripPrice(2029,"TX")); setGpO(false); setCodYear(2029);
             setDebtPct(60); setCostDebt(6); setCostEquity(12); setUseFixedHurdle(true); setFixedHurdle(10); setProjLife(30);
-            setFedTax(21); setStateTax(0); setDeprKey("20-yr"); setConstructionYears(3);
+            setFedTax(21); setStateTax(0); setDeprMethod("MACRS 7-yr");
             setUse45Q(true); setQ45Duration(12); setQ45Inflation(2); setQ45StartYear(2029); setGrantAmt(0);
             setUse48C(false); setItcPct(30);
             setUseCDRCredit(false); setCdrCreditRate(200); setUseAvoidCredit(false); setAvoidCreditRate(30);
@@ -148,8 +148,8 @@ export default function SummaryTab({
             <div style={{...row, borderBottom: "none"}}>
               <span style={rowL}>Heat Rate</span>
               <div style={rowR}>
-                <input type="number" value={heatRateBtu} onChange={(e) => setHeatRateBtu(Number(e.target.value) || 0)} min="1000" step="100" style={{...fi, width: 90}} />
-                <span style={unit}>Btu/kWh</span>
+                <input type="number" value={heatRateBtu} onChange={(e) => setHeatRateBtu(Number(e.target.value) || 0)} min="1" step="0.1" style={{...fi, width: 90}} />
+                <span style={unit}>MMBtu/MWh</span>
               </div>
             </div>
           )}
@@ -207,8 +207,13 @@ export default function SummaryTab({
           <div style={row}>
             <span style={{...rowL,fontSize:10,color:"#888888"}}>COD Year</span>
             <div style={rowR}>
-              <input type="number" value={codYear} onChange={e=>{const y=parseInt(e.target.value)||2029;setCodYear(y);if(!gpO)setGp(hhStripPrice(y,st));}} step="1" style={{...fi,width:60,fontSize:10}} />
+              <input type="number" value={codYear} onChange={e=>{const y=parseInt(e.target.value)||codYear;setCodYear(y);setCodYearOverride(true);if(!gpO)setGp(hhStripPrice(y,st));}} step="1" style={{...fi,width:80}} />
             </div>
+          </div>
+          <div style={{...sub, paddingBottom: 4}}>
+            {codYearOverride
+              ? <span style={{color:"#f68d2e"}}>Manual — <span onClick={()=>setCodYearOverride(false)} style={{cursor:"pointer",textDecoration:"underline"}}>reset to NETL</span></span>
+              : <span style={{color:"#888888"}}>{(NETL_FIN[src]||NETL_DEFAULT).constructionYrs}-yr build · COD = {yr} + {(NETL_FIN[src]||NETL_DEFAULT).constructionYrs}</span>}
           </div>
           <div style={{...sub, paddingBottom: 12}}>
             {(!res || res.hasFuel) && <span style={{fontSize:9,color:"#58a7af"}}>{HUB_NAME[st]||"HH"}: HH ${hhBase(codYear).toFixed(2)} {(HUB_BASIS[st]||0)>=0?"+":""}{(HUB_BASIS[st]||0).toFixed(2)} basis → ${hhStripPrice(codYear,st).toFixed(2)} Y1</span>}
