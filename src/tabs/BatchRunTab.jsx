@@ -1,7 +1,6 @@
 import * as XLSX from 'xlsx';
-import { SC, CEPCI, LF, TECH, EIA, STATE_TAX, BASE_GP, MACRS, HUB_NAME, HUB_BASIS } from '../constants';
-import { hhStripPrice } from '../utils/helpers';
-import { gv } from '../utils/engCalculations';
+import { SC, CEPCI, LF, TECH, EIA, STATE_TAX, HUB_NAME, HUB_BASIS } from '../constants';
+import { gv, calcLCOC } from '../utils/engCalculations';
 import { fi, sec, secH } from '../utils/styles';
 
 export default function BatchRunTab({
@@ -10,7 +9,9 @@ export default function BatchRunTab({
   batchFileName, setBatchFileName, batchColMap, setBatchColMap,
   batchHeaders, setBatchHeaders, batchPreview, setBatchPreview,
   cfIn, setCfIn, useFixedHurdle, fixedHurdle, setFixedHurdle,
-  projLife, setProjLife, yr, setYr, codYear, tech
+  projLife, setProjLife, yr, setYr, codYear,
+  tech, setTech, crCustom, setCrCustom, bt, setBt,
+  pp, gp, debtPct, costDebt, costEquity
 }) {
   const SOURCE_ALIASES = {
     "ng processing": "NG Processing", "natural gas processing": "NG Processing", "gas processing": "NG Processing",
@@ -129,9 +130,9 @@ export default function BatchRunTab({
         const results = [];
         let processed = 0, skipped = 0;
         const useCF = parseFloat(cfIn) || 85;
-        const useDR = useFixedHurdle ? fixedHurdle / 100 : 0.10;
-        const useLife = projLife || 25;
         const useYr = yr || 2026;
+        const calcWACC = (debtPct / 100) * (costDebt / 100) + ((100 - debtPct) / 100) * (costEquity / 100);
+        const discountRate = useFixedHurdle ? fixedHurdle / 100 : calcWACC;
 
         batchData.forEach((row) => {
           const rawState = batchColMap.state ? row[batchColMap.state] : "";
@@ -143,64 +144,34 @@ export default function BatchRunTab({
 
           if (!stCode || !srcName) { skipped++; results.push({ ...row, _status: "Skipped", _reason: !stCode ? "Bad state: " + rawState : "Bad source: " + rawSource }); return; }
 
-          const vd = gv(srcName, 90, "Retrofit");
+          const vd = gv(srcName, `${crCustom}%`, bt);
           if (!vd) { skipped++; results.push({ ...row, _status: "Skipped", _reason: "No model data for: " + srcName }); return; }
 
-          const refCO2 = vd.rco;
-          const refCF = vd.cf;
-          const cf2 = useCF / 100;
-          let pCO2 = rawCO2 > 0 ? rawCO2 : refCO2 * (cf2 / refCF);
-          let sR = (pCO2 / (cf2 / refCF)) / refCO2;
+          const cf = useCF / 100;
+          const captureRate = crCustom / 100;
 
-          const tF = TECH[tech] || TECH.amine;
-          const cR2 = (CEPCI[useYr] || CEPCI[2026]) / CEPCI[2018];
-          const lR2 = (LF[stCode] ? LF[stCode].f : 1) / (LF[vd.bs] ? LF[vd.bs].f : 0.97);
-          const cS2 = sR !== 1 ? Math.pow(sR, 0.6) : 1;
+          // Step 1: Plant capacity & CO₂
+          let pCO2, sR, co2Produced, plantCap;
+          if (rawCO2 > 0) {
+            // Spreadsheet provided CO₂ captured
+            pCO2 = rawCO2;
+            sR = (pCO2 / (cf / vd.cf)) / vd.rco;
+            co2Produced = pCO2 / captureRate;
+            plantCap = sR * vd.rpc;
+          } else {
+            // NETL default
+            sR = 1.0;
+            pCO2 = vd.rco * (cf / vd.cf);
+            co2Produced = pCO2 / captureRate;
+            plantCap = vd.rpc;
+          }
+          const plantCapUnit = vd.rpu || "units";
+          const expOut = plantCap * cf;
 
-          const sTIC = vd.tic * 1e6 * cR2 * lR2 * cS2 * tF.capex;
-          const sTOC = sTIC * (vd.toc / vd.tic);
-          const annCO2 = pCO2 * cf2;
-
-          // Fixed O&M: 1/sR exponent matches main model (smaller plants → higher $/t fixed cost)
-          // Variable O&M and OPEX tech multiplier uses tF.opex, consistent with TECH constant definition
-          const foScale = sR !== 1 ? Math.pow(1 / sR, 0.15) : 1;
-          const sFO = vd.fo * foScale * cR2 * tF.opex;
-          const sVO = vd.vo * cR2 * tF.opex;
-
-          const ePP = (EIA[stCode] || 8) * 10;
-          const ePW = vd.pw * sR * tF.power;
-          const pPt = annCO2 > 0 ? (ePW * 8760 * cf2 * ePP) / annCO2 : 0;
-
-          const gp2 = hhStripPrice(codYear, stCode);
-          const sFL = vd.fl > 0 ? vd.fl * (gp2 / BASE_GP) : 0;
-
-          const stTax2 = STATE_TAX[stCode] || 0;
-          const combTax = (21 + stTax2 * (1 - 0.21)) / 100;
-
-          const deprKey = "20-yr";
-          const deprSched = MACRS[deprKey] || MACRS["20-yr"];
-          let depPV = 0;
-          for (let i = 0; i < deprSched.length; i++) depPV += (sTOC * deprSched[i] * combTax) / Math.pow(1 + useDR, i + 1);
-          const netCapex = sTOC - depPV;
-
-          let pvAnn = 0;
-          for (let y2 = 1; y2 <= useLife; y2++) pvAnn += 1 / Math.pow(1 + useDR, y2);
-          const npvCO2 = annCO2 * pvAnn;
-
-          const capexLCOC = npvCO2 > 0 ? (netCapex / npvCO2) : 0;
-          const at = 1 - combTax;
-          const foLCOC = sFO * at;
-          const voLCOC = sVO * at;
-          const elecLCOC = pPt * at;
-          const gasLCOC = sFL * at;
-          const lcoc = capexLCOC + foLCOC + voLCOC + elecLCOC + gasLCOC;
-
-          // Pre-tax OPEX components (for reference)
-          const foPreTax = sFO;
-          const voPreTax = sVO;
-          const elecPreTax = pPt;
-          const gasPreTax = sFL;
-          const lcocPreTax = capexLCOC + foPreTax + voPreTax + elecPreTax + gasPreTax;
+          // Step 2: NETL reference data already in vd
+          // Step 3+: Cost calculation
+          const r = calcLCOC({ vd, pCO2, sR, techKey: tech, yr: useYr, st: stCode, pp, gp, cf, discountRate });
+          const { sTOC, capC, sFO, sVO, pPt, sFL, total: lcoc, cR: cepciR, lR: locR, cS: capScale } = r;
 
           processed++;
           results.push({
@@ -208,25 +179,31 @@ export default function BatchRunTab({
             _status: "OK",
             _srcResolved: srcName,
             _stateResolved: stCode,
+            // Full calc objects for BatchModelTab
+            _vd: vd,
+            _calcResult: r,
+            _inputs: { srcName, stCode, rawCO2, cf, pCO2, sR, techKey: tech, yr: useYr, pp, gp, discountRate, crCustom, bt, co2Produced, plantCap, plantCapUnit, expOut },
             // ── CAPEX ──────────────────────────────────────────
             "CAPEX $MM":                    Math.round(sTOC / 1e6 * 100) / 100,
-            "CAPEX After-Tax $/t":          Math.round(capexLCOC * 100) / 100,
-            // ── OPEX — After-Tax $/t ───────────────────────────
-            "Fixed OPEX After-Tax $/t":     Math.round(foLCOC * 100) / 100,
-            "Variable OPEX After-Tax $/t":  Math.round(voLCOC * 100) / 100,
-            "Electricity After-Tax $/t":    Math.round(elecLCOC * 100) / 100,
-            "Nat Gas After-Tax $/t":        Math.round(gasLCOC * 100) / 100,
-            // ── OPEX — Pre-Tax $/t (reference) ─────────────────
-            "Fixed OPEX Pre-Tax $/t":       Math.round(foPreTax * 100) / 100,
-            "Variable OPEX Pre-Tax $/t":    Math.round(voPreTax * 100) / 100,
-            "Electricity Pre-Tax $/t":      Math.round(elecPreTax * 100) / 100,
-            "Nat Gas Pre-Tax $/t":          Math.round(gasPreTax * 100) / 100,
-            // ── Totals ─────────────────────────────────────────
-            "LCOC After-Tax $/t":           Math.round(lcoc * 100) / 100,
-            "LCOC Pre-Tax $/t":             Math.round(lcocPreTax * 100) / 100,
+            "Capital $/t":                  Math.round(capC * 100) / 100,
+            // ── OPEX $/t CO₂ ──────────────────────────────────
+            "Fixed OPEX $/t":               Math.round(sFO * 100) / 100,
+            "Variable OPEX $/t":            Math.round(sVO * 100) / 100,
+            "Power $/t":                    Math.round(pPt * 100) / 100,
+            "Nat Gas $/t":                  Math.round(sFL * 100) / 100,
+            // ── Total ─────────────────────────────────────────
+            "LCOC $/t":                     Math.round(lcoc * 100) / 100,
             // ── Volume ─────────────────────────────────────────
-            "CO2 Captured tpa":             Math.round(annCO2),
-            "CO2 Source tpa":               Math.round(pCO2),
+            "CO2 Captured tpa":             Math.round(pCO2),
+            // ── Debug ─────────────────────────────────────────
+            "sR":                           Math.round(sR * 1000) / 1000,
+            "CEPCI Ratio":                  Math.round(cepciR * 1000) / 1000,
+            "Location Factor":              Math.round(locR * 1000) / 1000,
+            "Cap Scale (0.6)":              Math.round(capScale * 1000) / 1000,
+            "WACC %":                       Math.round(discountRate * 10000) / 100,
+            "Elec $/MWh":                   pp,
+            "Gas $/MMBtu":                  Math.round(gp * 100) / 100,
+            "CF":                           cf,
           });
         });
 
@@ -330,7 +307,7 @@ export default function BatchRunTab({
                 const fieldGuide = [
                   { Field: "Facility Name",          Required: "No",         "Data Type": "Text",          "Valid Values / Range": "Any text",                                   "Used In Model": "Label only — not used in LCOC calculations" },
                   { Field: "State",                   Required: "YES",        "Data Type": "Text",          "Valid Values / Range": "2-letter code: TX, CA, LA … (see State Reference sheet)", "Used In Model": "Location factor (CAPEX adj.), EIA electricity price, gas hub basis, state tax" },
-                  { Field: "Emission Source",         Required: "YES",        "Data Type": "Text",          "Valid Values / Range": "See Source Reference sheet for exact names and aliases",      "Used In Model": "Selects NETL cost scenario: TIC, OPEX, parasitic power, fuel, CCF" },
+                  { Field: "Emission Source",         Required: "YES",        "Data Type": "Text",          "Valid Values / Range": "See Source Reference sheet for exact names and aliases",      "Used In Model": "Selects NETL cost scenario: TIC, OPEX, parasitic power, fuel, WACC" },
                   { Field: "CO2 Emissions (tpa)",     Required: "Recommended","Data Type": "Number",        "Valid Values / Range": "> 0 tonnes/yr",                              "Used In Model": "Sets project scale for cost calculation. If blank, model uses NETL reference CO₂ for the source." },
                   { Field: "Plant Capacity",          Required: "No",         "Data Type": "Number",        "Valid Values / Range": "In the source's native units (MW, MMSCFD, t/yr)",  "Used In Model": "Alternative to CO₂ input — used if CO₂ column is blank. Scaling applies either way." },
                   { Field: "Plant CF (%)",            Required: "No",         "Data Type": "Number (1–100)","Valid Values / Range": "1 to 100 (percent)",                         "Used In Model": "Capacity factor — fraction of calendar hours operating. Default from Model Settings (typically 85%)." },
@@ -346,8 +323,9 @@ export default function BatchRunTab({
                   { Setting: "Discount Rate (%)", Default: "10",   Description: "Hurdle rate used in LCOC capital charge factor calculation. NETL source-specific rates range from 4.55% to 8.50%." },
                   { Setting: "Project Life (yr)", Default: "25",   Description: "Economic project lifetime in years. Affects capital charge annualization and depreciation tax shield." },
                   { Setting: "Cost Year",         Default: "2026", Description: "CEPCI escalation target year. All NETL 2018 reference costs are inflated to this year using CEPCI indices." },
-                  { Setting: "Technology",        Default: "Amine (MEA)", Description: "Capture technology. Applied uniformly to all rows. Options: Amine (MEA), Adv. Amine, Membrane, Cryogenic, Solid Sorbent." },
-                  { Setting: "Capture Rate",      Default: "90%",  Description: "CO₂ capture efficiency. Currently fixed at 90% in batch mode. Affects the fraction of available CO₂ that is captured." },
+                  { Setting: "Technology",        Default: "Amine (MEA)", Description: "Capture technology. Applied uniformly to all rows. Options: Amine (MEA), Adv. Amine, Membrane, Cryogenic, Solid Sorbent, MOF." },
+                  { Setting: "Capture Rate",      Default: "90%",  Description: "CO₂ capture efficiency (50–99%). Applied uniformly to all rows. Affects the fraction of available CO₂ that is captured." },
+                  { Setting: "Build Type",        Default: "Retrofit", Description: "Retrofit or Greenfield. Applied uniformly to all rows. Greenfield includes additional site preparation costs." },
                   { Setting: "COD Year",          Default: "2029", Description: "Commercial operation date. Used to look up natural gas strip price from Bloomberg forward curve (Y1 COD price)." },
                 ];
                 const ws5 = XLSX.utils.json_to_sheet(settingsGuide);
@@ -431,9 +409,28 @@ export default function BatchRunTab({
           <div style={{ padding: 18 }}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 16 }}>
               <div>
+                <label style={{ fontSize: 12, fontWeight: 600, display: "block", color: "#333" }}>Capture Rate (%)</label>
+                <input type="number" min={50} max={99} value={crCustom} onChange={(e) => setCrCustom(Math.max(50, Math.min(99, Number(e.target.value))))} style={{ ...fi, width: "100%", marginTop: 4 }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, display: "block", color: "#333" }}>Build Type</label>
+                <select value={bt} onChange={(e) => setBt(e.target.value)} style={{ ...fi, width: "100%", marginTop: 4, textAlign: "left", cursor: "pointer" }}>
+                  <option value="Retrofit">Retrofit</option>
+                  <option value="Greenfield">Greenfield</option>
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, display: "block", color: "#333" }}>Technology</label>
+                <select value={tech} onChange={(e) => setTech(e.target.value)} style={{ ...fi, width: "100%", marginTop: 4, textAlign: "left", cursor: "pointer" }}>
+                  {Object.entries(TECH).map(([k, t]) => <option key={k} value={k}>{t.n}</option>)}
+                </select>
+              </div>
+              <div>
                 <label style={{ fontSize: 12, fontWeight: 600, display: "block", color: "#333" }}>Capture CF (%)</label>
                 <input type="number" value={cfIn || "85"} onChange={(e) => setCfIn(e.target.value)} style={{ ...fi, width: "100%", marginTop: 4 }} />
               </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 16, marginTop: 12 }}>
               <div>
                 <label style={{ fontSize: 12, fontWeight: 600, display: "block", color: "#333" }}>Discount Rate (%)</label>
                 <input type="number" value={fixedHurdle} onChange={(e) => setFixedHurdle(Number(e.target.value))} style={{ ...fi, width: "100%", marginTop: 4 }} />
@@ -490,10 +487,9 @@ export default function BatchRunTab({
                   <tr>
                     <th colSpan={4} style={{ padding: "4px 8px", background: "#f5f5f5", border: "1px solid #e0e0e0", fontWeight: 700, position: "sticky", top: 0, textAlign: "center" }}></th>
                     <th colSpan={2} style={{ padding: "4px 8px", background: "#e8f5e9", border: "1px solid #e0e0e0", fontWeight: 700, position: "sticky", top: 0, textAlign: "center", color: "#2e7d32" }}>CAPEX</th>
-                    <th colSpan={4} style={{ padding: "4px 8px", background: "#e3f2fd", border: "1px solid #e0e0e0", fontWeight: 700, position: "sticky", top: 0, textAlign: "center", color: "#1565c0" }}>After-Tax $/t CO₂</th>
-                    <th colSpan={4} style={{ padding: "4px 8px", background: "#fff8e1", border: "1px solid #e0e0e0", fontWeight: 700, position: "sticky", top: 0, textAlign: "center", color: "#f57f17" }}>Pre-Tax $/t CO₂ (ref)</th>
-                    <th colSpan={2} style={{ padding: "4px 8px", background: "#f3e5f5", border: "1px solid #e0e0e0", fontWeight: 700, position: "sticky", top: 0, textAlign: "center", color: "#6a1b9a" }}>Totals</th>
-                    <th colSpan={2} style={{ padding: "4px 8px", background: "#f5f5f5", border: "1px solid #e0e0e0", fontWeight: 700, position: "sticky", top: 0, textAlign: "center" }}>Volume</th>
+                    <th colSpan={4} style={{ padding: "4px 8px", background: "#e3f2fd", border: "1px solid #e0e0e0", fontWeight: 700, position: "sticky", top: 0, textAlign: "center", color: "#1565c0" }}>OPEX $/t CO₂</th>
+                    <th style={{ padding: "4px 8px", background: "#f3e5f5", border: "1px solid #e0e0e0", fontWeight: 700, position: "sticky", top: 0, textAlign: "center", color: "#6a1b9a" }}>Total</th>
+                    <th style={{ padding: "4px 8px", background: "#f5f5f5", border: "1px solid #e0e0e0", fontWeight: 700, position: "sticky", top: 0, textAlign: "center" }}>Volume</th>
                   </tr>
                   {/* Column header row */}
                   <tr>
@@ -503,19 +499,13 @@ export default function BatchRunTab({
                       { label: "Source",       align: "left"  },
                       { label: "Facility",     align: "left"  },
                       { label: "CAPEX $MM",    align: "right", bg: "#e8f5e9" },
-                      { label: "CAPEX $/t",    align: "right", bg: "#e8f5e9" },
+                      { label: "Capital $/t",  align: "right", bg: "#e8f5e9" },
                       { label: "Fixed $/t",    align: "right", bg: "#e3f2fd" },
                       { label: "Variable $/t", align: "right", bg: "#e3f2fd" },
-                      { label: "Elec $/t",     align: "right", bg: "#e3f2fd" },
+                      { label: "Power $/t",    align: "right", bg: "#e3f2fd" },
                       { label: "Gas $/t",      align: "right", bg: "#e3f2fd" },
-                      { label: "Fixed $/t",    align: "right", bg: "#fff8e1" },
-                      { label: "Variable $/t", align: "right", bg: "#fff8e1" },
-                      { label: "Elec $/t",     align: "right", bg: "#fff8e1" },
-                      { label: "Gas $/t",      align: "right", bg: "#fff8e1" },
-                      { label: "LCOC AT $/t",  align: "right", bg: "#e8d5fb", bold: true },
-                      { label: "LCOC PT $/t",  align: "right", bg: "#f3e5f5" },
-                      { label: "CO₂ Cap tpa",  align: "right" },
-                      { label: "CO₂ Src tpa",  align: "right" },
+                      { label: "LCOC $/t",     align: "right", bg: "#e8d5fb", bold: true },
+                      { label: "CO₂ tpa",      align: "right" },
                     ].map((h, i) => (
                       <th key={i} style={{ padding: "5px 8px", background: h.bg || "#f5f5f5", border: "1px solid #e0e0e0", fontWeight: h.bold ? 800 : 700, position: "sticky", top: 24, textAlign: h.align, whiteSpace: "nowrap", fontSize: 10 }}>{h.label}</th>
                     ))}
@@ -524,7 +514,8 @@ export default function BatchRunTab({
                 <tbody>
                   {batchResults.rows.slice(0, 200).map((r, i) => {
                     const ok = r._status === "OK";
-                    const facilityCol = batchColMap.state ? Object.keys(r).find(k => k !== batchColMap.state && k !== batchColMap.source && k !== batchColMap.co2 && !k.startsWith("_") && !["CAPEX $MM","CAPEX After-Tax $/t","Fixed OPEX After-Tax $/t","Variable OPEX After-Tax $/t","Electricity After-Tax $/t","Nat Gas After-Tax $/t","Fixed OPEX Pre-Tax $/t","Variable OPEX Pre-Tax $/t","Electricity Pre-Tax $/t","Nat Gas Pre-Tax $/t","LCOC After-Tax $/t","LCOC Pre-Tax $/t","CO2 Captured tpa","CO2 Source tpa"].includes(k)) : null;
+                    const resultKeys = ["CAPEX $MM","Capital $/t","Fixed OPEX $/t","Variable OPEX $/t","Power $/t","Nat Gas $/t","LCOC $/t","CO2 Captured tpa"];
+                    const facilityCol = batchColMap.state ? Object.keys(r).find(k => k !== batchColMap.state && k !== batchColMap.source && k !== batchColMap.co2 && !k.startsWith("_") && !resultKeys.includes(k)) : null;
                     const f = v => v != null ? "$" + v.toFixed(2) : "—";
                     return (
                       <tr key={i} style={{ background: !ok ? "#fef2f2" : i % 2 === 0 ? "#fff" : "#fafafa" }}>
@@ -533,19 +524,13 @@ export default function BatchRunTab({
                         <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", whiteSpace: "nowrap" }}>{r._srcResolved || "—"}</td>
                         <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", color: "#888", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{facilityCol ? String(r[facilityCol] || "").substring(0, 25) : "—"}</td>
                         <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", background: "#f7fdf7" }}>{r["CAPEX $MM"] != null ? r["CAPEX $MM"].toFixed(1) : "—"}</td>
-                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", background: "#f7fdf7" }}>{f(r["CAPEX After-Tax $/t"])}</td>
-                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", background: "#f0f8ff" }}>{f(r["Fixed OPEX After-Tax $/t"])}</td>
-                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", background: "#f0f8ff" }}>{f(r["Variable OPEX After-Tax $/t"])}</td>
-                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", background: "#f0f8ff" }}>{f(r["Electricity After-Tax $/t"])}</td>
-                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", background: "#f0f8ff" }}>{f(r["Nat Gas After-Tax $/t"])}</td>
-                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", color: "#aaa" }}>{f(r["Fixed OPEX Pre-Tax $/t"])}</td>
-                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", color: "#aaa" }}>{f(r["Variable OPEX Pre-Tax $/t"])}</td>
-                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", color: "#aaa" }}>{f(r["Electricity Pre-Tax $/t"])}</td>
-                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", color: "#aaa" }}>{f(r["Nat Gas Pre-Tax $/t"])}</td>
-                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", fontWeight: 700, color: "#58b947", background: "#f5eeff" }}>{f(r["LCOC After-Tax $/t"])}</td>
-                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", color: "#888" }}>{f(r["LCOC Pre-Tax $/t"])}</td>
+                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", background: "#f7fdf7" }}>{f(r["Capital $/t"])}</td>
+                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", background: "#f0f8ff" }}>{f(r["Fixed OPEX $/t"])}</td>
+                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", background: "#f0f8ff" }}>{f(r["Variable OPEX $/t"])}</td>
+                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", background: "#f0f8ff" }}>{f(r["Power $/t"])}</td>
+                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", background: "#f0f8ff" }}>{f(r["Nat Gas $/t"])}</td>
+                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", fontWeight: 700, color: "#58b947", background: "#f5eeff" }}>{f(r["LCOC $/t"])}</td>
                         <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{r["CO2 Captured tpa"] ? r["CO2 Captured tpa"].toLocaleString() : "—"}</td>
-                        <td style={{ padding: "3px 8px", border: "1px solid #f0f0f0", textAlign: "right", color: "#aaa", fontVariantNumeric: "tabular-nums" }}>{r["CO2 Source tpa"] ? r["CO2 Source tpa"].toLocaleString() : "—"}</td>
                       </tr>
                     );
                   })}

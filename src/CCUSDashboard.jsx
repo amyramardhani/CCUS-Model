@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { SC, CEPCI, LF, TECH, EIA, STATE_TAX, BASE_GP, NETL_FIN, NETL_DEFAULT, CDR_TYPES, AVOID_TYPES } from './constants';
-import { toMWh, hhStripPrice, bestCreditType } from './utils/helpers';
-import { gv, PP_DEFAULTS } from './utils/engCalculations';
+import { fm, fd, toMWh, hhStripPrice, bestCreditType } from './utils/helpers';
+import { gv, calcLCOC, PP_DEFAULTS } from './utils/engCalculations';
 import SummaryTab from './tabs/SummaryTab';
 import ModelTab from './tabs/ModelTab';
 import ChartsTab from './tabs/ChartsTab';
@@ -9,13 +9,14 @@ import SensitivityTab from './tabs/SensitivityTab';
 import SimulationTab from './tabs/SimulationTab';
 import AssumptionsTab from './tabs/AssumptionsTab';
 import BatchRunTab from './tabs/BatchRunTab';
+import BatchModelTab from './tabs/BatchModelTab';
 
 const CX_LABELS = {fg:"Flue Gas Cleanup",fw:"Feedwater & BOP",ds:"Ductwork & Stack",cw:"Cooling Water",el:"Electrical",ic:"I&C",si:"Site Improvements",bd:"Buildings",st:"Steam Turbine",ac:"Air Contactor",th:"Thermal System",ed:"Electrodialysis"};
 const EMIT_FACTORS = {"NGCC F-Frame":0.05306,"NGCC H-Frame":0.05306,"Coal SC":0.09552,"Coal Sub-C":0.09552,"Biomass":0};
 
 export default function CCUSDashboard() {
   const [src, setSrc] = useState("Ammonia");
-  const [crCustom, setCrCustom] = useState(99);
+  const [crCustom, setCrCustom] = useState(90);
   const [bt, setBt] = useState("Retrofit");
   const [tech, setTech] = useState("amine");
   const [st, setSt] = useState("TX");
@@ -198,40 +199,58 @@ export default function CCUSDashboard() {
   const res = useMemo(() => {
     const vd = gv(src, cr, bt);
     if (!vd) return null;
+
+    // ── STEP 1: Plant Capacity & CO₂ ──────────────────────────
+    // Determine plant size, CO₂ produced, CO₂ captured first —
+    // these drive all downstream scaling.
     const refCO2 = vd.rco;
     const refCF = vd.cf;
     const userCF = parseFloat(cfIn);
     const cf = (userCF > 0 && userCF <= 100) ? userCF / 100 : refCF;
     const cfCustom = (userCF > 0 && userCF <= 100);
     const isNGCC = src === "NGCC F-Frame" || src === "NGCC H-Frame";
-    let pCO2 = refCO2 * (cf / refCF), sR = 1.0, cust = false;
-    const uC = parseFloat(co2Cap), uP = parseFloat(plCap);
-    if (EMIT_FACTORS[src]) {
-      // Combustion sources: plant-cap driven. plCap is gross MW (nameplate).
-      if (uP > 0) { sR = uP / (vd.rpc + vd.pw); cust = true; }
-      const captureRate = parseFloat(cr) / 100;
-      pCO2 = derivedCO2 > 0 ? derivedCO2 * captureRate : refCO2 * sR * (cf / refCF);
+    const isCombustion = !!(EMIT_FACTORS[src]);
+    const captureRate = parseFloat(cr) / 100;
+    const uP = parseFloat(plCap);
+    const grossRef = vd.rpc + (vd.pw || 0);
+
+    let sR = 1.0, cust = false;
+    let plantCap, co2Produced, co2Captured;
+
+    if (isCombustion) {
+      // Combustion: plant cap in gross MW drives CO₂ produced via HR × EF
+      plantCap = uP > 0 ? uP : grossRef;
+      if (uP > 0) { sR = uP / grossRef; cust = true; }
+      co2Produced = derivedCO2 > 0 ? derivedCO2 : refCO2 / captureRate * sR * (cf / refCF);
+      co2Captured = co2Produced * captureRate;
     } else if (uP > 0) {
-      // Non-combustion: 4-box UI always writes to plCap (native source units)
-      sR = uP / vd.rpc; pCO2 = refCO2 * sR * (cf / refCF); cust = true;
-    } else if (cfCustom) { cust = true; }
-    const tF = TECH[tech] || TECH.amine;
-    const cR = (CEPCI[yr] || CEPCI[2026]) / CEPCI[2018];
-    const lR = (LF[st] ? LF[st].f : 1) / (LF[vd.bs] ? LF[vd.bs].f : 0.97);
-    const cS = (sR !== 1) ? Math.pow(sR, 0.6) : 1;
-    const rT = vd.tic * 1e6, rO = vd.toc * 1e6, rOwn = rO - rT;
-    const sT = rT * cS * cR * lR * tF.capex, sOwn = rOwn * cS * cR * lR * tF.capex, sTOC = sT + sOwn;
-    const fS = (sR !== 1) ? Math.pow(1 / sR, 0.15) : 1;
-    const sFO = vd.fo * fS * cR * tF.opex, sVO = vd.vo * cR * tF.opex;
-    const sPW = vd.pw * sR * tF.power;
-    const aPwr = sPW * pp * cf * 8760, pPt = aPwr / pCO2;
+      // Non-combustion with user-entered plant capacity
+      plantCap = uP;
+      sR = uP / vd.rpc;
+      co2Captured = refCO2 * sR * (cf / refCF);
+      co2Produced = co2Captured / captureRate;
+      cust = true;
+    } else {
+      // Default: NETL reference
+      plantCap = vd.rpc;
+      co2Captured = refCO2 * (cf / refCF);
+      co2Produced = co2Captured / captureRate;
+      if (cfCustom) cust = true;
+    }
+
+    const pCO2 = co2Captured;
+    const plantCapUnit = isCombustion ? "MW" : (vd.rpu || "units");
+    const expOut = isCombustion ? plantCap * cf * 8760 : plantCap * cf;
+    const expOutUnit = isCombustion ? "MWh/yr" : (vd.rpu || "units");
+
+    // ── STEP 2: NETL Reference + CR/BT adjustments (vd from gv()) ──
+    // Already computed above — vd contains adjusted NETL data.
+
+    // ── STEP 3+: Cost calculation ─────────────────────────────
     const calcWACC = (debtPct / 100) * (costDebt / 100) + ((100 - debtPct) / 100) * (costEquity / 100);
     const discountRate = useFixedHurdle ? (fixedHurdle / 100) : calcWACC;
-    const n = projLife;
-    const useCCF = discountRate / (1 - Math.pow(1 + discountRate, -n));
-    const capC = (sTOC * useCCF) / pCO2;
-    const bfl = vd.fl || 0;
-    const sFL = bfl * (gp / BASE_GP);
+    const core = calcLCOC({ vd, pCO2, sR, techKey: tech, yr, st, pp, gp, cf, discountRate });
+    const { sT, sFO, sVO } = core;
     const cxData = vd.cx || {};
     const cxBreak = Object.entries(cxData)
       .filter(([,f]) => f > 0)
@@ -249,12 +268,10 @@ export default function CCUSDashboard() {
       { key: "wst", label: "Waste & Consumables", frac: 0.27, color: "#fdcf0c" }
     ].map(item => ({ ...item, val: sVO * item.frac, valM: sVO * item.frac * pCO2 }));
     return {
-      vd, pCO2, sR, cust, cR, lR, cS, fS, rT, rOwn, sT, sOwn, sTOC,
-      tpt: sT / pCO2, opt: sOwn / pCO2, tocpt: sTOC / pCO2,
-      sFO, sVO, tOM: sFO + sVO, sPW, aPwr, pPt, capC,
-      sFL, bfl, hasFuel: bfl > 0, cxBreak, fomItems, vomItems, cf, cfCustom, isNGCC,
-      total: capC + sFO + sVO + pPt + sFL, ccf: useCCF, baseCCF: vd.ccf,
-      wacc: calcWACC, discountRate, tech: tF
+      ...core, cust, cf, cfCustom, isNGCC, isCombustion,
+      plantCap, plantCapUnit, co2Produced, co2Captured, expOut, expOutUnit,
+      cxBreak, fomItems, vomItems,
+      wacc: calcWACC, tech: core.tF
     };
   }, [src, crCustom, bt, tech, st, yr, plCap, pp, gp, cfIn, debtPct, costDebt, costEquity, useFixedHurdle, fixedHurdle, projLife, plantMW, plantCFpct, heatRateBtu, derivedCO2]);
 
@@ -273,7 +290,7 @@ export default function CCUSDashboard() {
       if (!dd) return null;
       const c2 = (CEPCI[yr] || CEPCI[2026]) / CEPCI[2018];
       const l2 = (LF[st] ? LF[st].f : 1) / (LF[dd.bs] ? LF[dd.bs].f : 0.97);
-      const cap = (dd.toc * 1e6 * dd.ccf) / dd.rco * c2 * l2;
+      const cap = (dd.toc * 1e6 * res.discountRate) / dd.rco * c2 * l2;
       const fix = dd.fo * c2;
       const vr2 = dd.vo * c2;
       const pwr = (dd.pw * pp * dd.cf * 8760) / dd.rco;
@@ -290,7 +307,8 @@ export default function CCUSDashboard() {
     { id: "sensitivity", label: "Sensitivity" },
     { id: "simulation", label: "Simulation" },
     { id: "assumptions", label: "Assumptions" },
-    { id: "batch", label: "Batch Run" }
+    { id: "batch", label: "Batch Run" },
+    { id: "batchmodel", label: "Batch Model" }
   ];
 
   return (
@@ -303,6 +321,72 @@ export default function CCUSDashboard() {
           <div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>NETL Data {"·"} CEPCI {"·"} Location Factors {"·"} EIA Power Pricing {"·"} Nat Gas Fuel {"·"} Six-Tenths Scaling &nbsp;<span style={{ fontSize: 9.5, color: "#aaa", background: "#333", padding: "1px 6px", verticalAlign: "middle" }}>hover <span style={{ borderBottom: "1px dotted #aaa" }}>dotted terms</span> for definitions</span></div>
         </div>
       </div>
+
+      {/* Key Metrics Bar */}
+      {res && (() => {
+        const sd = SC[src];
+        const cfDisplay = res.cf ? (res.cf * 100).toFixed(0) : "—";
+        const co2Capt = res.pCO2;
+        const tocM = res.sTOC / 1e6;
+        const techObj = res.tF || TECH[tech] || TECH.amine;
+        const techLabel = techObj.n || tech;
+        const waccDisplay = (res.discountRate * 100).toFixed(2);
+        const kv = (label, value, unitStr, color) => (
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "0 12px",
+            borderRight: "1px solid #e0e0e0" }}>
+            <div style={{ fontSize: 9, fontWeight: 600, color: "#999", textTransform: "uppercase",
+              letterSpacing: "0.03em", whiteSpace: "nowrap" }}>{label}</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: color || "#333", marginTop: 1 }}>{value}</div>
+            <div style={{ fontSize: 8, color: "#aaa" }}>{unitStr}</div>
+          </div>
+        );
+        const sep = () => (
+          <div style={{ width: 2, alignSelf: "stretch", background: "#58b94733", margin: "2px 4px" }} />
+        );
+        return (
+          <div style={{ position: "sticky", top: 0, zIndex: 100, background: "#fafafa", borderBottom: "1px solid #e0e0e0", padding: "6px 24px", boxShadow: "0 2px 8px rgba(0,0,0,0.06)" }}>
+            <div style={{ maxWidth: 1600, margin: "0 auto" }}>
+              {/* ── Row 1: Inputs ── */}
+              <div style={{ display: "flex", alignItems: "center", gap: 0, overflowX: "auto", paddingBottom: 4, borderBottom: "1px solid #eee" }}>
+                <div style={{ fontSize: 8, fontWeight: 700, color: "#58b947", textTransform: "uppercase", letterSpacing: "0.05em", padding: "0 8px 0 0", whiteSpace: "nowrap" }}>Inputs</div>
+                {kv("Source", src, sd?.cat || "")}
+                {kv("CR", crCustom + "%", "")}
+                {kv("Build Type", bt, "")}
+                {kv("Technology", techLabel, "")}
+                {kv("State", st, "")}
+                {kv("Cost Year", yr, "")}
+                {kv("COD Year", codYear, "")}
+                {kv("CF", cfDisplay + "%", "")}
+                {kv("Elec Price", "$" + pp, "$/MWh")}
+                {kv("Gas Price", "$" + gp, "$/MMBtu")}
+                {kv("WACC", waccDisplay + "%", useFixedHurdle ? "fixed" : "calc")}
+              </div>
+              {/* ── Row 2: Outputs ── */}
+              <div style={{ display: "flex", alignItems: "center", gap: 0, overflowX: "auto", paddingTop: 4 }}>
+                <div style={{ fontSize: 8, fontWeight: 700, color: "#58b947", textTransform: "uppercase", letterSpacing: "0.05em", padding: "0 8px 0 0", whiteSpace: "nowrap" }}>Outputs</div>
+                {kv("CO\u2082 Captured", fm(co2Capt, 0), "t/yr")}
+                {res.sR !== 1 && kv("Scale (sR)", res.sR.toFixed(3) + "x", "")}
+                {kv("CEPCI", res.cR.toFixed(3) + "x", "")}
+                {kv("Location", res.lR.toFixed(3) + "x", "")}
+                {sep()}
+                {kv("CAPEX", fd(tocM, 1) + "M", "")}
+                {kv("Capital", fd(res.capC, 2), "$/t CO\u2082")}
+                {kv("Fixed OPEX", fd(res.sFO, 2), "$/t CO\u2082")}
+                {kv("Var OPEX", fd(res.sVO, 2), "$/t CO\u2082")}
+                {kv("Power", fd(res.pPt, 2), "$/t CO\u2082")}
+                {res.hasFuel && kv("Fuel", fd(res.sFL, 2), "$/t CO\u2082")}
+                {sep()}
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "0 14px" }}>
+                  <div style={{ fontSize: 9, fontWeight: 600, color: "#999", textTransform: "uppercase",
+                    letterSpacing: "0.03em" }}>LCOC</div>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: "#58b947", marginTop: 1 }}>{fd(res.total, 2)}</div>
+                  <div style={{ fontSize: 8, color: "#aaa" }}>$/t CO&#x2082;</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       <div style={{ maxWidth: 1600, margin: "0 auto", padding: "0 24px 40px" }}>
         {/* Tab bar */}
@@ -416,6 +500,10 @@ export default function CCUSDashboard() {
           <AssumptionsTab res={res} src={src} st={st} yr={yr} tech={tech} codYear={codYear} projLife={projLife} />
         )}
 
+        {tab === "batchmodel" && (
+          <BatchModelTab batchResults={batchResults} />
+        )}
+
         {tab === "batch" && (
           <BatchRunTab
             batchData={batchData} setBatchData={setBatchData}
@@ -429,7 +517,12 @@ export default function CCUSDashboard() {
             cfIn={cfIn} setCfIn={setCfIn}
             useFixedHurdle={useFixedHurdle} fixedHurdle={fixedHurdle} setFixedHurdle={setFixedHurdle}
             projLife={projLife} setProjLife={setProjLife}
-            yr={yr} setYr={setYr} codYear={codYear} tech={tech}
+            yr={yr} setYr={setYr} codYear={codYear}
+            tech={tech} setTech={setTech}
+            crCustom={crCustom} setCrCustom={setCrCustom}
+            bt={bt} setBt={setBt}
+            pp={pp} gp={gp}
+            debtPct={debtPct} costDebt={costDebt} costEquity={costEquity}
           />
         )}
       </div>

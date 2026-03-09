@@ -5,6 +5,7 @@ import {
   XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, ReferenceLine
 } from 'recharts';
 import { SC, CEPCI, LF, TECH, BASE_GP, CX_COLORS, HUB_NAME } from '../constants';
+import { gv } from '../utils/engCalculations';
 import { fm, fd, toMWh, hhStripPrice } from '../utils/helpers';
 import { cd, ch } from '../utils/styles';
 
@@ -55,7 +56,7 @@ export default function ChartsTab({
     const sVO = v.vo * cR2 * tF.opex;
     const sPW = v.pw * m * tF.power;
     const pPt = (sPW * pp * res.cf * 8760) / pCO2;
-    const capC = (sTOC * v.ccf) / pCO2;
+    const capC = (sTOC * res.discountRate) / pCO2;
     const sFL = (v.fl || 0) * (gp / BASE_GP);
     const opex = sFO + sVO + pPt + sFL;
     flowData.push({
@@ -79,7 +80,7 @@ export default function ChartsTab({
     const yNum = parseInt(y);
     const cR = CEPCI[yNum] / CEPCI[2018];
     const sTOC = (v.tic * 1e6 + (v.toc - v.tic) * 1e6) * cScale * cR * lR2;
-    const cap = (sTOC * v.ccf) / res.pCO2;
+    const cap = (sTOC * res.discountRate) / res.pCO2;
     const fix = v.fo * fScale * cR;
     const vari = v.vo * cR;
     const pwr = (v.pw * res.sR * pp * res.cf * 8760) / res.pCO2;
@@ -96,7 +97,7 @@ export default function ChartsTab({
       const d = s.vr ? Object.values(s.vr)[0] : s;
       const rco = d.rco || s.rco;
       const lR3 = (LF[st] ? LF[st].f : 1) / (LF[s.bs] ? LF[s.bs].f : 0.97);
-      const cap2 = ((d.toc || s.toc) * 1e6 * (d.ccf || s.ccf)) / rco * cR * lR3;
+      const cap2 = ((d.toc || s.toc) * 1e6 * res.discountRate) / rco * cR * lR3;
       const fix2 = (d.fo || s.fo) * cR;
       const var2 = (d.vo || s.vo) * cR;
       const pwr2 = ((d.pw || s.pw) * pp * (s.cf || 0.85) * 8760) / rco;
@@ -111,7 +112,7 @@ export default function ChartsTab({
     if (!t.compat.includes(srcCat)) return null;
     const sT2 = res.rT * res.cS * res.cR * res.lR * t.capex;
     const sOwn2 = res.rOwn * res.cS * res.cR * res.lR * t.capex;
-    const capC2 = ((sT2 + sOwn2) * v.ccf) / res.pCO2;
+    const capC2 = ((sT2 + sOwn2) * res.discountRate) / res.pCO2;
     const sFO2 = v.fo * res.fS * res.cR * t.opex;
     const sVO2 = v.vo * res.cR * t.opex;
     const pPt2 = (v.pw * res.sR * t.power * pp * res.cf * 8760) / res.pCO2;
@@ -130,7 +131,7 @@ export default function ChartsTab({
     const row = { Year: yNum };
     compatTechs.forEach(([k, t]) => {
       const lf = Math.max(0.5, Math.pow(1 - (t.learn || 0), Math.max(0, yNum - (t.baseYr || 2018))));
-      const capC2 = ((res.rT + res.rOwn) * res.cS * cR * res.lR * t.capex * lf * v.ccf) / res.pCO2;
+      const capC2 = ((res.rT + res.rOwn) * res.cS * cR * res.lR * t.capex * lf * res.discountRate) / res.pCO2;
       const sFO2 = v.fo * res.fS * cR * t.opex * lf;
       const sVO2 = v.vo * cR * t.opex * lf;
       const pPt2 = (v.pw * res.sR * t.power * pp * res.cf * 8760) / res.pCO2;
@@ -144,7 +145,7 @@ export default function ChartsTab({
     const row = { Year: yNum };
     compatTechs.forEach(([k, t]) => {
       const lf = Math.max(0.5, Math.pow(1 - (t.learn || 0), Math.max(0, yNum - (t.baseYr || 2018))));
-      const capC2 = ((res.rT + res.rOwn) * res.cS * 1 * res.lR * t.capex * lf * v.ccf) / res.pCO2;
+      const capC2 = ((res.rT + res.rOwn) * res.cS * 1 * res.lR * t.capex * lf * res.discountRate) / res.pCO2;
       const sFO2 = v.fo * res.fS * 1 * t.opex * lf;
       const sVO2 = v.vo * 1 * t.opex * lf;
       const pPt2 = (v.pw * res.sR * t.power * pp * res.cf * 8760) / res.pCO2;
@@ -154,6 +155,88 @@ export default function ChartsTab({
   });
   const base2018 = pureLearnData.find(d => d.Year === 2018);
   const latestLearn = pureLearnData[pureLearnData.length - 1];
+
+  // ── LCOC sensitivity sweeps ─────────────────────────
+  // LCOC vs Capture Rate: sweep CR from 50% to 99%
+  const crSweep = [];
+  for (let c = 50; c <= 99; c += 1) {
+    const vd2 = gv(src, `${c}%`, bt);
+    if (!vd2) continue;
+    const cf2 = res.cf;
+    const pCO2_2 = vd2.rco * (cf2 / vd2.cf);
+    const cS2 = res.sR !== 1 ? Math.pow(res.sR, 0.6) : 1;
+    const fS2 = res.sR !== 1 ? Math.pow(1 / res.sR, 0.15) : 1;
+    const sTOC2 = (vd2.toc * 1e6) * cS2 * cR2 * lR2 * tF.capex;
+    const capC2 = (sTOC2 * res.discountRate) / pCO2_2;
+    const sFO2 = vd2.fo * fS2 * cR2 * tF.opex;
+    const sVO2 = vd2.vo * cR2 * tF.opex;
+    const pPt2 = (vd2.pw * res.sR * tF.power * pp * cf2 * 8760) / pCO2_2;
+    const sFL2 = (vd2.fl || 0) * (gp / BASE_GP);
+    crSweep.push({ cr: c, lcoc: +(capC2 + sFO2 + sVO2 + pPt2 + sFL2).toFixed(2), capex: +capC2.toFixed(2), opex: +(sFO2 + sVO2).toFixed(2), power: +pPt2.toFixed(2) });
+  }
+
+  // LCOC vs CAPEX ($MM): sweep CAPEX multiplier 0.5x to 2.0x
+  const capexSweep = [];
+  const curCapexMM = res.sTOC / 1e6;
+  for (let m = 0.5; m <= 2.0; m += 0.05) {
+    const capC2 = res.capC * m;
+    const total2 = capC2 + res.sFO + res.sVO + res.pPt + res.sFL;
+    const capexMM = curCapexMM * m;
+    capexSweep.push({ capexMM: +capexMM.toFixed(1), lcoc: +total2.toFixed(2) });
+  }
+
+  // LCOC vs OPEX ($MM/yr): sweep OPEX multiplier 0.5x to 2.0x
+  const opexSweep = [];
+  const curOpexMM = (res.sFO + res.sVO) * res.pCO2 / 1e6;
+  for (let m = 0.5; m <= 2.0; m += 0.05) {
+    const sFO2 = res.sFO * m;
+    const sVO2 = res.sVO * m;
+    const total2 = res.capC + sFO2 + sVO2 + res.pPt + res.sFL;
+    const opexMM = curOpexMM * m;
+    opexSweep.push({ opexMM: +opexMM.toFixed(1), lcoc: +total2.toFixed(2) });
+  }
+
+  // LCOC vs Power (MW): sweep parasitic power load 0.3x to 3.0x
+  const pwrSweep = [];
+  const curPwrMW = res.sPW;
+  for (let m = 0.3; m <= 3.0; m += 0.1) {
+    const pwMW = curPwrMW * m;
+    const pPt2 = (pwMW * pp * res.cf * 8760) / res.pCO2;
+    const total2 = res.capC + res.sFO + res.sVO + pPt2 + res.sFL;
+    pwrSweep.push({ mw: +pwMW.toFixed(1), lcoc: +total2.toFixed(2) });
+  }
+
+  // LCOC vs Facility Size: sweep sR from 0.2x to 3.0x of reference
+  const sizeSweep = [];
+  const curCO2tpy = res.pCO2;
+  for (let m = 0.2; m <= 3.0; m += 0.1) {
+    const pCO2_s = v.rco * m * (res.cf / v.cf);
+    const cS_s = Math.pow(m, 0.6);
+    const fS_s = Math.pow(1 / m, 0.15);
+    const sTOC_s = (v.toc * 1e6) * cS_s * cR2 * lR2 * tF.capex;
+    const capC_s = (sTOC_s * res.discountRate) / pCO2_s;
+    const sFO_s = v.fo * fS_s * cR2 * tF.opex;
+    const sVO_s = v.vo * cR2 * tF.opex;
+    const sPW_s = v.pw * m * tF.power;
+    const pPt_s = (sPW_s * pp * res.cf * 8760) / pCO2_s;
+    const sFL_s = (v.fl || 0) * (gp / BASE_GP);
+    sizeSweep.push({
+      co2k: +(pCO2_s / 1e3).toFixed(0),
+      lcoc: +(capC_s + sFO_s + sVO_s + pPt_s + sFL_s).toFixed(2),
+      capital: +capC_s.toFixed(2),
+      opex: +(sFO_s + sVO_s).toFixed(2),
+      power: +pPt_s.toFixed(2),
+      capexMM: +(sTOC_s / 1e6).toFixed(1),
+    });
+  }
+  const curCO2k = +(curCO2tpy / 1e3).toFixed(0);
+
+  // refs for new charts
+  const crSweepRef = useRef(null);
+  const capexSweepRef = useRef(null);
+  const opexSweepRef = useRef(null);
+  const pwrSweepRef = useRef(null);
+  const sizeSweepRef = useRef(null);
 
   // ── state LCOC heatmap data ──────────────────────────
   const stateMap = {};
@@ -167,7 +250,7 @@ export default function ChartsTab({
     const gp3 = hhStripPrice(yr, code);
     const sPW3 = (v.pw * res.sR * tF.power * pp3 * res.cf * 8760) / res.pCO2;
     const sFL3 = (v.fl || 0) * (gp3 / BASE_GP);
-    const capC3 = (sTOC3 * v.ccf) / res.pCO2;
+    const capC3 = (sTOC3 * res.discountRate) / res.pCO2;
     stateMap[code] = { lcoc: capC3 + sFO3 + sVO3 + sPW3 + sFL3, pp: pp3, gp: gp3, name: loc.n };
   });
   const stateVals = Object.values(stateMap).map(s => s.lcoc).filter(Number.isFinite);
@@ -313,174 +396,309 @@ export default function ChartsTab({
       {onXLSX && <Btn onClick={onXLSX}>XLSX</Btn>}
     </h3>
   );
-  const axStyle = { tick: { fill: '#aaaaaa', fontSize: 9 } };
-  const ttStyle = { contentStyle: { background: '#fff', border: '1px solid #e0e0e0', borderRadius: 0, fontSize: 10 } };
+  const axStyle = { tick: { fill: '#333', fontSize: 10, fontWeight: 600 } };
+  const ttStyle = { contentStyle: { background: '#fff', border: '1px solid #e0e0e0', borderRadius: 0, fontSize: 11 } };
   const curFlow = res.pCO2;
   const srcColors = { "Ammonia":"#58b947","Ethylene Oxide":"#58a7af","Ethanol":"#58b947","NG Processing":"#22c55e","Coal-to-Liquids":"#888888","Gas-to-Liquids":"#aaaaaa","Refinery H\u2082":"#f68d2e","Cement":"#b83a4b","Steel & Iron":"#b83a4b","Pulp & Paper":"#93348f","NGCC F-Frame":"#ef509a","NGCC H-Frame":"#f68d2e","Coal SC":"#be185d","Ambient Air":"#58a7af","Ocean Water":"#58a7af" };
 
+  // ── shared layout constants ─────────────────────────
+  const G2 = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 };
+  const card = { ...cd, borderRadius: 6 };
+  const cardMb = { ...card, marginBottom: 24 };
+  const secHead = { fontSize: 13, fontWeight: 700, color: '#58b947', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 16, marginTop: 32, paddingBottom: 8, borderBottom: '2px solid #e0e0e0' };
+  const note = { fontSize: 10, color: '#999', marginTop: 6, lineHeight: 1.5 };
+  const H = 300;
+  const margin = { top: 10, right: 16, bottom: 44, left: 16 };
+  const axLabel = { position: 'bottom', offset: 16, style: { fontSize: 11, fill: '#333', fontWeight: 700 } };
+
   return (
     <div>
-      {/* Export All button */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
-        <button onClick={exportAllXLSX} style={{ fontSize: 10, padding: '5px 16px', border: '1px solid #58b947', background: '#f0faf0', cursor: 'pointer', borderRadius: 3, color: '#58b947', fontWeight: 600 }}>
-          ↓ Export All Chart Data (Excel)
+      {/* Export All */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
+        <button onClick={exportAllXLSX} style={{ fontSize: 11, padding: '6px 18px', border: '1px solid #58b947', background: '#f0faf0', cursor: 'pointer', borderRadius: 4, color: '#58b947', fontWeight: 600 }}>
+          Export All Chart Data (XLSX)
         </button>
       </div>
 
+      {/* ═══════════════════════════════════════════════════════════
+          SECTION 1 — Cost Breakdown
+          ═══════════════════════════════════════════════════════════ */}
+      <div style={secHead}>Cost Breakdown</div>
+
       {/* Pie charts */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 18 }}>
-        <div style={cd}>
+      <div style={G2}>
+        <div style={card}>
           <ChHead onPNG={() => exportPNG(pieRef1, `LCOC_Pie_${src}`)} onXLSX={() => exportXLSX([{ label: 'LCOC Breakdown', data: pie.map(p => ({ Component: p.name, '$/t CO2': p.value })) }], `LCOC_Pie_${src}`)}>
-            {src} {cr} {bt} — LCOC Breakdown
+            LCOC Breakdown — {src} {cr} {bt}
           </ChHead>
           <div ref={pieRef1}>
-            <ResponsiveContainer width="100%" height={220}>
+            <ResponsiveContainer width="100%" height={200}>
               <PieChart>
-                <Pie data={pie} dataKey="value" cx="50%" cy="50%" innerRadius={50} outerRadius={90} paddingAngle={2} stroke="none">
+                <Pie data={pie} dataKey="value" cx="50%" cy="50%" innerRadius={45} outerRadius={85} paddingAngle={2} stroke="none">
                   {pie.map((e, i) => <Cell key={i} fill={e.color} />)}
                 </Pie>
-                <Tooltip formatter={(val) => fd(val)} contentStyle={{ background: '#ffffff', border: '1px solid #e0e0e0', borderRadius: 0, fontSize: 11 }} />
+                <Tooltip formatter={(val) => fd(val)} {...ttStyle} />
               </PieChart>
             </ResponsiveContainer>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, marginTop: 4 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, marginTop: 8 }}>
             {pie.map(c => (
-              <div key={c.name} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11 }}>
-                <div style={{ width: 8, height: 8, background: c.color, flexShrink: 0 }} />
-                <span style={{ color: '#888888' }}>{c.name}</span>
-                <span style={{ marginLeft: 'auto', fontWeight: 600, color: '#444444' }}>{fd(c.value)}</span>
+              <div key={c.name} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+                <div style={{ width: 8, height: 8, background: c.color, borderRadius: 1, flexShrink: 0 }} />
+                <span style={{ color: '#888' }}>{c.name}</span>
+                <span style={{ marginLeft: 'auto', fontWeight: 600, color: '#333' }}>{fd(c.value)}</span>
               </div>
             ))}
           </div>
-          <div style={{ marginTop: 10, padding: '8px 0', borderTop: '1px solid #444444', textAlign: 'center' }}>
-            <div style={{ fontSize: 10, color: '#aaaaaa' }}>Total LCOC</div>
-            <div style={{ fontSize: 24, fontWeight: 700, color: '#58b947' }}>{fd(res.total)}<span style={{ fontSize: 12, color: '#aaaaaa', fontWeight: 400 }}>/t CO₂</span></div>
+          <div style={{ marginTop: 12, padding: '10px 0 0', borderTop: '1px solid #e0e0e0', textAlign: 'center' }}>
+            <div style={{ fontSize: 10, color: '#aaa', marginBottom: 2 }}>Total LCOC</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: '#58b947' }}>{fd(res.total)}<span style={{ fontSize: 11, color: '#aaa', fontWeight: 400 }}> /t CO₂</span></div>
           </div>
         </div>
 
-        <div style={cd}>
+        <div style={card}>
           <ChHead onPNG={() => exportPNG(pieRef2, `CAPEX_Pie_${src}`)} onXLSX={() => exportXLSX([{ label: 'CAPEX Breakdown', data: res.cxBreak.map(c => ({ System: c.label, '$M': +(c.val/1e6).toFixed(2), '%': +(c.frac*100).toFixed(1) })) }], `CAPEX_Pie_${src}`)}>
-            {src} {cr} {bt} — Total Installed Cost by System
+            CAPEX by System — {src} {cr} {bt}
           </ChHead>
           <div ref={pieRef2}>
-            <ResponsiveContainer width="100%" height={220}>
+            <ResponsiveContainer width="100%" height={200}>
               <PieChart>
-                <Pie data={res.cxBreak.map(c => ({ name: c.label, value: c.frac, color: CX_COLORS[c.key] || '#666666' }))} dataKey="value" cx="50%" cy="50%" innerRadius={50} outerRadius={90} paddingAngle={2} stroke="none">
-                  {res.cxBreak.map((c, i) => <Cell key={i} fill={CX_COLORS[c.key] || '#666666'} />)}
+                <Pie data={res.cxBreak.map(c => ({ name: c.label, value: c.frac, color: CX_COLORS[c.key] || '#666' }))} dataKey="value" cx="50%" cy="50%" innerRadius={45} outerRadius={85} paddingAngle={2} stroke="none">
+                  {res.cxBreak.map((c, i) => <Cell key={i} fill={CX_COLORS[c.key] || '#666'} />)}
                 </Pie>
-                <Tooltip formatter={(val) => (val * 100).toFixed(0) + '%'} contentStyle={{ background: '#ffffff', border: '1px solid #e0e0e0', borderRadius: 0, fontSize: 11 }} />
+                <Tooltip formatter={(val) => (val * 100).toFixed(0) + '%'} {...ttStyle} />
               </PieChart>
             </ResponsiveContainer>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, marginTop: 4 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, marginTop: 8 }}>
             {res.cxBreak.slice(0, 6).map(c => (
-              <div key={c.key} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11 }}>
-                <div style={{ width: 8, height: 8, background: CX_COLORS[c.key] || '#666666', flexShrink: 0 }} />
-                <span style={{ color: '#888888', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.label}</span>
-                <span style={{ marginLeft: 'auto', fontWeight: 600, color: '#444444', flexShrink: 0 }}>{(c.frac * 100).toFixed(0)}%</span>
+              <div key={c.key} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+                <div style={{ width: 8, height: 8, background: CX_COLORS[c.key] || '#666', borderRadius: 1, flexShrink: 0 }} />
+                <span style={{ color: '#888', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.label}</span>
+                <span style={{ marginLeft: 'auto', fontWeight: 600, color: '#333', flexShrink: 0 }}>{(c.frac * 100).toFixed(0)}%</span>
               </div>
             ))}
           </div>
-          <div style={{ marginTop: 10, padding: '8px 0', borderTop: '1px solid #444444', textAlign: 'center' }}>
-            <div style={{ fontSize: 10, color: '#aaaaaa' }}>Total Installed Cost</div>
-            <div style={{ fontSize: 24, fontWeight: 700, color: '#93348f' }}>{fd(res.sT / 1e6, 1)}<span style={{ fontSize: 12, color: '#aaaaaa', fontWeight: 400 }}>M</span></div>
+          <div style={{ marginTop: 12, padding: '10px 0 0', borderTop: '1px solid #e0e0e0', textAlign: 'center' }}>
+            <div style={{ fontSize: 10, color: '#aaa', marginBottom: 2 }}>Total Installed Cost</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: '#93348f' }}>{fd(res.sT / 1e6, 1)}<span style={{ fontSize: 11, color: '#aaa', fontWeight: 400 }}>M</span></div>
           </div>
         </div>
       </div>
 
-      {/* LCOC Cost Stack */}
-      <div style={{ ...cd, marginBottom: 18 }}>
+      {/* Cost Stack */}
+      <div style={cardMb}>
         <ChHead onPNG={() => exportPNG(stackRef, `Cost_Stack_${src}`)} onXLSX={() => exportXLSX([{ label: 'Cost Stack', data: stackComps.map(c => ({ Component: c.name, '$/t': c.val, '%': +(c.val/res.total*100).toFixed(1) })) }], `Cost_Stack_${src}`)}>
-          {src} {cr} {bt} — LCOC Cost Stack
+          LCOC Cost Stack — {src} {cr} {bt}
         </ChHead>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, alignItems: 'center' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, alignItems: 'center' }}>
           <div ref={stackRef}>
             <ResponsiveContainer width="100%" height={80}>
               <BarChart data={stackBarD} layout="vertical" margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
                 <XAxis type="number" hide domain={[0, res.total]} />
                 <YAxis type="category" dataKey="name" hide />
-                <Tooltip contentStyle={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 0, fontSize: 11 }} formatter={v => fd(v)} />
+                <Tooltip {...ttStyle} formatter={v => fd(v)} />
                 {stackComps.map(c => <Bar key={c.name} dataKey={c.name} stackId="a" fill={c.color} />)}
               </BarChart>
             </ResponsiveContainer>
           </div>
           <div>
             {stackComps.map(c => (
-              <div key={c.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: '1px solid #fafafa' }}>
-                <span style={{ fontSize: 11, color: '#666666', display: 'flex', alignItems: 'center', gap: 5 }}>
+              <div key={c.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: '1px solid #f0f0f0' }}>
+                <span style={{ fontSize: 11, color: '#666', display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span style={{ display: 'inline-block', width: 10, height: 10, background: c.color, borderRadius: 1 }} />{c.name}
                 </span>
-                <span style={{ fontSize: 12, fontWeight: 700, color: '#333333', fontVariantNumeric: 'tabular-nums' }}>{fd(c.val)} <span style={{ fontSize: 9, color: '#aaaaaa' }}>({(c.val/res.total*100).toFixed(0)}%)</span></span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: '#333', fontVariantNumeric: 'tabular-nums' }}>
+                  {fd(c.val)} <span style={{ fontSize: 9, color: '#aaa' }}>({(c.val/res.total*100).toFixed(0)}%)</span>
+                </span>
               </div>
             ))}
-            <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 6, marginTop: 4, borderTop: '2px solid #444444' }}>
-              <span style={{ fontSize: 12, fontWeight: 700, color: '#333333' }}>Total LCOC</span>
-              <span style={{ fontSize: 16, fontWeight: 700, color: '#58b947' }}>{fd(res.total)}<span style={{ fontSize: 10, color: '#aaaaaa', fontWeight: 400 }}>/t CO₂</span></span>
+            <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 8, marginTop: 6, borderTop: '2px solid #333' }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: '#333' }}>Total LCOC</span>
+              <span style={{ fontSize: 16, fontWeight: 700, color: '#58b947' }}>{fd(res.total)}<span style={{ fontSize: 10, color: '#aaa', fontWeight: 400 }}> /t CO₂</span></span>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Flow rate charts */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 18 }}>
-        <div style={cd}>
-          <ChHead onPNG={() => exportPNG(flowRef, `Flow_LCOC_${src}`)} onXLSX={() => exportXLSX([{ label: 'Flow Rate Curve', data: flowData.map(d => ({ 'CO2 t/yr': d.flow, 'LCOC $/t': d.lcoc, 'Capital $/t': d.capex, 'Fixed OPEX $/t': d.fixedOpex, 'Var OPEX $/t': d.varOpex, 'Power $/t': d.power, 'Fuel $/t': d.fuel, 'CAPEX $M': d.tocM, 'OPEX $M/yr': d.opexM })) }], `Flow_Curve_${src}`)}>
+      {/* ═══════════════════════════════════════════════════════════
+          SECTION 2 — Scaling & Flow Rate
+          ═══════════════════════════════════════════════════════════ */}
+      <div style={secHead}>Scaling & Flow Rate</div>
+
+      <div style={G2}>
+        <div style={card}>
+          <ChHead onPNG={() => exportPNG(flowRef, `Flow_LCOC_${src}`)} onXLSX={() => exportXLSX([{ label: 'Flow Rate Curve', data: flowData.map(d => ({ 'CO2 t/yr': d.flow, 'LCOC $/t': d.lcoc, 'CAPEX $M': d.tocM, 'OPEX $M/yr': d.opexM })) }], `Flow_Curve_${src}`)}>
             LCOC vs CO₂ Flow Rate
           </ChHead>
           <div ref={flowRef}>
-            <ResponsiveContainer width="100%" height={220}>
-              <LineChart data={flowData} margin={{ top: 8, right: 12, bottom: 24, left: 8 }}>
-                <XAxis dataKey="flow" {...axStyle} tickFormatter={v => fm(v, 0)} label={{ value: 'CO₂ t/yr', position: 'bottom', offset: 4, style: { fontSize: 9, fill: '#aaaaaa' } }} />
-                <YAxis {...axStyle} tickFormatter={v => '$' + v} width={48} />
+            <ResponsiveContainer width="100%" height={H}>
+              <LineChart data={flowData} margin={margin}>
+                <XAxis dataKey="flow" {...axStyle} tickFormatter={v => fm(v, 0)} label={{ value: 'CO₂ (t/yr)', ...axLabel }} />
+                <YAxis {...axStyle} tickFormatter={v => '$' + v} width={50} />
                 <Tooltip {...ttStyle} formatter={v => '$' + v.toFixed(2) + '/t'} labelFormatter={v => fm(v, 0) + ' t/yr'} />
-                <ReferenceLine x={curFlow} stroke="#333333" strokeDasharray="3 3" strokeWidth={1} />
+                <ReferenceLine x={curFlow} stroke="#333" strokeDasharray="3 3" strokeWidth={1} />
                 <Line type="monotone" dataKey="lcoc" stroke="#58b947" strokeWidth={2.5} dot={false} name="LCOC" />
               </LineChart>
             </ResponsiveContainer>
           </div>
+          <div style={note}>Dashed line = current facility size. Larger throughput reduces per-tonne costs via six-tenths rule.</div>
         </div>
-        <div style={cd}>
-          <ChHead>CAPEX vs CO₂ Flow Rate</ChHead>
-          <ResponsiveContainer width="100%" height={220}>
-            <LineChart data={flowData} margin={{ top: 8, right: 12, bottom: 24, left: 8 }}>
-              <XAxis dataKey="flow" {...axStyle} tickFormatter={v => fm(v, 0)} label={{ value: 'CO₂ t/yr', position: 'bottom', offset: 4, style: { fontSize: 9, fill: '#aaaaaa' } }} />
-              <YAxis {...axStyle} tickFormatter={v => '$' + v + 'M'} width={52} />
+
+        <div style={card}>
+          <ChHead onPNG={() => exportPNG(sizeSweepRef, `LCOC_vs_Size_${src}`)} onXLSX={() => exportXLSX([{ label: 'LCOC vs Facility Size', data: sizeSweep }], `LCOC_vs_Size_${src}`)}>
+            LCOC vs Facility Size
+          </ChHead>
+          <div ref={sizeSweepRef}>
+            <ResponsiveContainer width="100%" height={H}>
+              <LineChart data={sizeSweep} margin={margin}>
+                <XAxis dataKey="co2k" {...axStyle} tickFormatter={v => fm(v, 0) + 'k'} label={{ value: 'CO₂ Captured (kt/yr)', ...axLabel }} />
+                <YAxis {...axStyle} tickFormatter={v => '$' + v} width={50} />
+                <Tooltip {...ttStyle} formatter={v => '$' + v + '/t'} labelFormatter={v => fm(v, 0) + ' kt CO₂/yr'} />
+                <ReferenceLine x={curCO2k} stroke="#333" strokeDasharray="3 3" strokeWidth={1} />
+                <Line type="monotone" dataKey="lcoc" stroke="#58b947" strokeWidth={2.5} dot={false} name="LCOC" />
+                <Line type="monotone" dataKey="capital" stroke="#58a7af" strokeWidth={1.5} dot={false} name="Capital" />
+                <Line type="monotone" dataKey="opex" stroke="#f68d2e" strokeWidth={1.5} dot={false} name="OPEX" />
+                <Line type="monotone" dataKey="power" stroke="#b83a4b" strokeWidth={1.5} dot={false} name="Power" />
+                <Legend wrapperStyle={{ fontSize: 11, fontWeight: 600, color: '#333' }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={note}>Dashed line = current ({fm(curCO2k, 0)}k t/yr). Sweep 0.2x–3.0x of reference plant.</div>
+        </div>
+      </div>
+
+      <div style={G2}>
+        <div style={card}>
+          <ChHead>CAPEX ($M) vs CO₂ Flow Rate</ChHead>
+          <ResponsiveContainer width="100%" height={H}>
+            <LineChart data={flowData} margin={margin}>
+              <XAxis dataKey="flow" {...axStyle} tickFormatter={v => fm(v, 0)} label={{ value: 'CO₂ (t/yr)', ...axLabel }} />
+              <YAxis {...axStyle} tickFormatter={v => '$' + v + 'M'} width={54} />
               <Tooltip {...ttStyle} formatter={v => '$' + v.toFixed(1) + 'M'} labelFormatter={v => fm(v, 0) + ' t/yr'} />
-              <ReferenceLine x={curFlow} stroke="#333333" strokeDasharray="3 3" strokeWidth={1} />
+              <ReferenceLine x={curFlow} stroke="#333" strokeDasharray="3 3" strokeWidth={1} />
               <Line type="monotone" dataKey="tocM" stroke="#58b947" strokeWidth={2} dot={false} name="CAPEX" />
             </LineChart>
           </ResponsiveContainer>
         </div>
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12, marginBottom: 18 }}>
-        <div style={cd}>
-          <ChHead>OPEX vs CO₂ Flow Rate</ChHead>
-          <ResponsiveContainer width="100%" height={220}>
-            <LineChart data={flowData} margin={{ top: 8, right: 12, bottom: 24, left: 8 }}>
-              <XAxis dataKey="flow" {...axStyle} tickFormatter={v => fm(v, 0)} label={{ value: 'CO₂ t/yr', position: 'bottom', offset: 4, style: { fontSize: 9, fill: '#aaaaaa' } }} />
-              <YAxis {...axStyle} tickFormatter={v => '$' + v} width={48} />
+
+        <div style={card}>
+          <ChHead>OPEX ($/t) vs CO₂ Flow Rate</ChHead>
+          <ResponsiveContainer width="100%" height={H}>
+            <LineChart data={flowData} margin={margin}>
+              <XAxis dataKey="flow" {...axStyle} tickFormatter={v => fm(v, 0)} label={{ value: 'CO₂ (t/yr)', ...axLabel }} />
+              <YAxis {...axStyle} tickFormatter={v => '$' + v} width={50} />
               <Tooltip {...ttStyle} formatter={v => '$' + v.toFixed(2) + '/t'} labelFormatter={v => fm(v, 0) + ' t/yr'} />
-              <ReferenceLine x={curFlow} stroke="#333333" strokeDasharray="3 3" strokeWidth={1} />
-              <Line type="monotone" dataKey="opex" stroke="#58b947" strokeWidth={2} dot={false} name="OPEX" />
+              <ReferenceLine x={curFlow} stroke="#333" strokeDasharray="3 3" strokeWidth={1} />
+              <Line type="monotone" dataKey="opex" stroke="#f68d2e" strokeWidth={2} dot={false} name="OPEX" />
             </LineChart>
           </ResponsiveContainer>
         </div>
       </div>
 
-      {/* All sources bar */}
-      <div style={{ ...cd, marginBottom: 18 }}>
+      {/* ═══════════════════════════════════════════════════════════
+          SECTION 3 — Sensitivity Sweeps
+          ═══════════════════════════════════════════════════════════ */}
+      <div style={secHead}>Sensitivity Sweeps</div>
+
+      <div style={G2}>
+        <div style={card}>
+          <ChHead onPNG={() => exportPNG(crSweepRef, `LCOC_vs_CR_${src}`)} onXLSX={() => exportXLSX([{ label: 'LCOC vs CR', data: crSweep }], `LCOC_vs_CR_${src}`)}>
+            LCOC vs Capture Rate
+          </ChHead>
+          <div ref={crSweepRef}>
+            <ResponsiveContainer width="100%" height={H}>
+              <LineChart data={crSweep} margin={margin}>
+                <XAxis dataKey="cr" {...axStyle} tickFormatter={v => v + '%'} label={{ value: 'Capture Rate (%)', ...axLabel }} />
+                <YAxis {...axStyle} tickFormatter={v => '$' + v} width={50} />
+                <Tooltip {...ttStyle} formatter={v => '$' + v + '/t'} labelFormatter={v => v + '% capture'} />
+                <ReferenceLine x={parseInt(cr)} stroke="#333" strokeDasharray="3 3" strokeWidth={1} />
+                <Line type="monotone" dataKey="lcoc" stroke="#58b947" strokeWidth={2.5} dot={false} name="LCOC" />
+                <Line type="monotone" dataKey="capex" stroke="#58a7af" strokeWidth={1.5} dot={false} name="Capital" />
+                <Line type="monotone" dataKey="opex" stroke="#f68d2e" strokeWidth={1.5} dot={false} name="OPEX" />
+                <Line type="monotone" dataKey="power" stroke="#b83a4b" strokeWidth={1.5} dot={false} name="Power" />
+                <Legend wrapperStyle={{ fontSize: 11, fontWeight: 600, color: '#333' }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={note}>Dashed line = current ({cr}). Power penalty drives LCOC up above ~90%.</div>
+        </div>
+
+        <div style={card}>
+          <ChHead onPNG={() => exportPNG(capexSweepRef, `LCOC_vs_CAPEX_${src}`)} onXLSX={() => exportXLSX([{ label: 'LCOC vs CAPEX', data: capexSweep }], `LCOC_vs_CAPEX_${src}`)}>
+            LCOC vs CAPEX ($MM)
+          </ChHead>
+          <div ref={capexSweepRef}>
+            <ResponsiveContainer width="100%" height={H}>
+              <LineChart data={capexSweep} margin={margin}>
+                <XAxis dataKey="capexMM" {...axStyle} tickFormatter={v => '$' + fm(v, 0) + 'M'} label={{ value: 'Total CAPEX ($MM)', ...axLabel }} />
+                <YAxis {...axStyle} tickFormatter={v => '$' + v} width={50} />
+                <Tooltip {...ttStyle} formatter={v => fd(v) + '/t'} labelFormatter={v => '$' + fm(v, 1) + 'MM'} />
+                <ReferenceLine x={+curCapexMM.toFixed(1)} stroke="#333" strokeDasharray="3 3" strokeWidth={1} />
+                <Line type="monotone" dataKey="lcoc" stroke="#58b947" strokeWidth={2.5} dot={false} name="LCOC" />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={note}>Dashed line = current (${fm(curCapexMM, 1)}MM). Sweep 0.5x–2.0x.</div>
+        </div>
+      </div>
+
+      <div style={G2}>
+        <div style={card}>
+          <ChHead onPNG={() => exportPNG(opexSweepRef, `LCOC_vs_OPEX_${src}`)} onXLSX={() => exportXLSX([{ label: 'LCOC vs OPEX', data: opexSweep }], `LCOC_vs_OPEX_${src}`)}>
+            LCOC vs OPEX ($MM/yr)
+          </ChHead>
+          <div ref={opexSweepRef}>
+            <ResponsiveContainer width="100%" height={H}>
+              <LineChart data={opexSweep} margin={margin}>
+                <XAxis dataKey="opexMM" {...axStyle} tickFormatter={v => '$' + fm(v, 0) + 'M'} label={{ value: 'Total OPEX ($MM/yr)', ...axLabel }} />
+                <YAxis {...axStyle} tickFormatter={v => '$' + v} width={50} />
+                <Tooltip {...ttStyle} formatter={v => fd(v) + '/t'} labelFormatter={v => '$' + fm(v, 1) + 'MM/yr'} />
+                <ReferenceLine x={+curOpexMM.toFixed(1)} stroke="#333" strokeDasharray="3 3" strokeWidth={1} />
+                <Line type="monotone" dataKey="lcoc" stroke="#58b947" strokeWidth={2.5} dot={false} name="LCOC" />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={note}>Dashed line = current (${fm(curOpexMM, 1)}MM/yr). Sweep 0.5x–2.0x.</div>
+        </div>
+
+        <div style={card}>
+          <ChHead onPNG={() => exportPNG(pwrSweepRef, `LCOC_vs_Power_${src}`)} onXLSX={() => exportXLSX([{ label: 'LCOC vs Power', data: pwrSweep }], `LCOC_vs_Power_${src}`)}>
+            LCOC vs Parasitic Power (MW)
+          </ChHead>
+          <div ref={pwrSweepRef}>
+            <ResponsiveContainer width="100%" height={H}>
+              <LineChart data={pwrSweep} margin={margin}>
+                <XAxis dataKey="mw" {...axStyle} tickFormatter={v => fm(v, 0) + ' MW'} label={{ value: 'Parasitic Power (MW)', ...axLabel }} />
+                <YAxis {...axStyle} tickFormatter={v => '$' + v} width={50} />
+                <Tooltip {...ttStyle} formatter={v => fd(v) + '/t'} labelFormatter={v => fm(v, 1) + ' MW'} />
+                <ReferenceLine x={+curPwrMW.toFixed(1)} stroke="#333" strokeDasharray="3 3" strokeWidth={1} />
+                <Line type="monotone" dataKey="lcoc" stroke="#58b947" strokeWidth={2.5} dot={false} name="LCOC" />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={note}>Dashed line = current ({fm(curPwrMW, 1)} MW at ${pp}/MWh). Sweep 0.3x–3.0x.</div>
+        </div>
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════
+          SECTION 4 — Source & Year Comparisons
+          ═══════════════════════════════════════════════════════════ */}
+      <div style={secHead}>Source & Year Comparisons</div>
+
+      <div style={cardMb}>
         <ChHead onPNG={() => exportPNG(barsRef, `All_Sources_${yr}`)} onXLSX={() => exportXLSX([{ label: 'All Sources', data: bars }], `All_Sources_${yr}`)}>
           All Sources — LCOC Comparison — {yr} · {LF[st] ? LF[st].n : st} · ${pp}/MWh
         </ChHead>
         <div ref={barsRef}>
-          <ResponsiveContainer width="100%" height={340}>
-            <BarChart data={bars} margin={{ top: 8, right: 12, bottom: 50, left: 12 }}>
-              <XAxis dataKey="name" tick={{ fill: '#aaaaaa', fontSize: 10 }} angle={-40} textAnchor="end" interval={0} />
-              <YAxis tick={{ fill: '#888888', fontSize: 10 }} tickFormatter={(val) => '$' + val} />
-              <Tooltip contentStyle={{ background: '#ffffff', border: '1px solid #e0e0e0', borderRadius: 0, fontSize: 11 }} formatter={(val) => fd(val)} />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
+          <ResponsiveContainer width="100%" height={320}>
+            <BarChart data={bars} margin={{ top: 10, right: 16, bottom: 50, left: 16 }}>
+              <XAxis dataKey="name" tick={{ fill: '#333', fontSize: 10, fontWeight: 600 }} angle={-40} textAnchor="end" interval={0} />
+              <YAxis tick={{ fill: '#333', fontSize: 10, fontWeight: 600 }} tickFormatter={v => '$' + v} />
+              <Tooltip {...ttStyle} formatter={v => fd(v)} />
+              <Legend wrapperStyle={{ fontSize: 11, fontWeight: 600, color: '#333' }} />
               <Bar dataKey="Capital" stackId="a" fill="#58b947" />
-              <Bar dataKey="Fixed OPEX" stackId="a" fill="#58b947" />
+              <Bar dataKey="Fixed OPEX" stackId="a" fill="#7cc96e" />
               <Bar dataKey="Variable OPEX" stackId="a" fill="#f68d2e" />
               <Bar dataKey="Power" stackId="a" fill="#b83a4b" />
               <Bar dataKey="Nat Gas" stackId="a" fill="#93348f" />
@@ -489,166 +707,166 @@ export default function ChartsTab({
         </div>
       </div>
 
-      {/* Year trend + source trend */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 18 }}>
-        <div style={cd}>
+      <div style={G2}>
+        <div style={card}>
           <ChHead onPNG={() => exportPNG(trendRef, `Year_Trend_${src}`)} onXLSX={() => exportXLSX([{ label: 'LCOC by Year', data: trendData }], `Year_Trend_${src}`)}>
             {src} — LCOC by Cost Year
           </ChHead>
           <div ref={trendRef}>
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={trendData} margin={{ top: 8, right: 12, bottom: 4, left: 8 }}>
-                <XAxis dataKey="Year" tick={{ fill: '#aaaaaa', fontSize: 10 }} />
-                <YAxis tick={{ fill: '#888888', fontSize: 10 }} tickFormatter={v => '$' + v} />
-                <Tooltip contentStyle={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 0, fontSize: 11 }} formatter={(val) => fd(val)} />
-                <Legend wrapperStyle={{ fontSize: 10 }} />
+            <ResponsiveContainer width="100%" height={H}>
+              <BarChart data={trendData} margin={margin}>
+                <XAxis dataKey="Year" tick={{ fill: '#333', fontSize: 10, fontWeight: 600 }} />
+                <YAxis tick={{ fill: '#333', fontSize: 10, fontWeight: 600 }} tickFormatter={v => '$' + v} />
+                <Tooltip {...ttStyle} formatter={v => fd(v)} />
+                <Legend wrapperStyle={{ fontSize: 11, fontWeight: 600, color: '#333' }} />
                 <Bar dataKey="Capital" stackId="a" fill="#58b947" />
-                <Bar dataKey="Fixed OPEX" stackId="a" fill="#58b947" />
+                <Bar dataKey="Fixed OPEX" stackId="a" fill="#7cc96e" />
                 <Bar dataKey="Var OPEX" stackId="a" fill="#f68d2e" />
                 <Bar dataKey="Power" stackId="a" fill="#b83a4b" />
                 <Bar dataKey="Fuel" stackId="a" fill="#93348f" />
               </BarChart>
             </ResponsiveContainer>
           </div>
-          <div style={{ fontSize: 10, color: '#aaaaaa', marginTop: 6 }}>
-            Costs escalated via CEPCI from 2018 base. Power & fuel held at current prices. {yr} selected → {fd(res.total)}/t.
-          </div>
+          <div style={note}>CEPCI-escalated from 2018. {yr} → {fd(res.total)}/t.</div>
         </div>
-        <div style={cd}>
+
+        <div style={card}>
           <ChHead onPNG={() => exportPNG(srcTrendRef, `Source_Trends_${yr}`)} onXLSX={() => exportXLSX([{ label: 'Source Trends', data: srcTrend }], `Source_Trends_${yr}`)}>
             All Sources — LCOC Trend by Cost Year
           </ChHead>
           <div ref={srcTrendRef}>
-            <ResponsiveContainer width="100%" height={260}>
-              <LineChart data={srcTrend} margin={{ top: 8, right: 12, bottom: 4, left: 8 }}>
-                <XAxis dataKey="Year" tick={{ fill: '#aaaaaa', fontSize: 10 }} />
-                <YAxis tick={{ fill: '#888888', fontSize: 10 }} tickFormatter={v => '$' + v} />
-                <Tooltip contentStyle={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 0, fontSize: 11 }} formatter={(val) => '$' + val + '/t'} />
-                <ReferenceLine x={yr} stroke="#333333" strokeDasharray="3 3" strokeWidth={1} />
+            <ResponsiveContainer width="100%" height={H}>
+              <LineChart data={srcTrend} margin={margin}>
+                <XAxis dataKey="Year" tick={{ fill: '#333', fontSize: 10, fontWeight: 600 }} />
+                <YAxis tick={{ fill: '#333', fontSize: 10, fontWeight: 600 }} tickFormatter={v => '$' + v} />
+                <Tooltip {...ttStyle} formatter={v => '$' + v + '/t'} />
+                <ReferenceLine x={yr} stroke="#333" strokeDasharray="3 3" strokeWidth={1} />
                 {Object.keys(SC).map(name => (
-                  <Line key={name} dataKey={name} stroke={srcColors[name] || '#aaaaaa'} strokeWidth={name === src ? 2.5 : 1} dot={false} opacity={name === src ? 1 : 0.5} />
+                  <Line key={name} dataKey={name} stroke={srcColors[name] || '#aaa'} strokeWidth={name === src ? 2.5 : 1} dot={false} opacity={name === src ? 1 : 0.4} />
                 ))}
               </LineChart>
             </ResponsiveContainer>
           </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px', marginTop: 6 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px', marginTop: 8 }}>
             {Object.keys(SC).map(name => (
               <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 9.5, opacity: name === src ? 1 : 0.5 }}>
-                <div style={{ width: 10, height: 2, background: srcColors[name] || '#aaaaaa' }} />
-                <span style={{ color: '#888888' }}>{name}</span>
+                <div style={{ width: 10, height: 2, background: srcColors[name] || '#aaa' }} />
+                <span style={{ color: '#888' }}>{name}</span>
               </div>
             ))}
           </div>
         </div>
       </div>
 
-      {/* Tech comparison */}
-      <div style={cd}>
+      {/* ═══════════════════════════════════════════════════════════
+          SECTION 5 — Technology
+          ═══════════════════════════════════════════════════════════ */}
+      <div style={secHead}>Technology Comparison</div>
+
+      <div style={cardMb}>
         <ChHead onPNG={() => exportPNG(techRef, `Tech_Compare_${src}`)} onXLSX={() => exportXLSX([{ label: 'Tech Comparison', data: techData.map(({ Technology, Capital, 'Fixed OPEX': fo, 'Var OPEX': vo, Power, Fuel, 'Total LCOC': tot }) => ({ Technology, 'Capital $/t': Capital, 'Fixed OPEX $/t': fo, 'Var OPEX $/t': vo, 'Power $/t': Power, 'Fuel $/t': Fuel, 'Total LCOC $/t': tot })) }], `Tech_Compare_${src}`)}>
-          {src} — LCOC by Technology Type ({yr} · {LF[st] ? LF[st].n : st})
+          {src} — LCOC by Technology ({yr} · {LF[st] ? LF[st].n : st})
         </ChHead>
         <div ref={techRef}>
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={techData} layout="vertical" margin={{ top: 8, right: 30, bottom: 4, left: 100 }}>
-              <XAxis type="number" tick={{ fill: '#888888', fontSize: 10 }} tickFormatter={v => '$' + v} />
-              <YAxis type="category" dataKey="Technology" tick={{ fill: '#444444', fontSize: 11 }} width={95} />
-              <Tooltip contentStyle={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 0, fontSize: 11 }} formatter={(val) => fd(val)} />
-              <Legend wrapperStyle={{ fontSize: 10 }} />
+          <ResponsiveContainer width="100%" height={H}>
+            <BarChart data={techData} layout="vertical" margin={{ top: 10, right: 30, bottom: 4, left: 100 }}>
+              <XAxis type="number" tick={{ fill: '#333', fontSize: 10, fontWeight: 600 }} tickFormatter={v => '$' + v} />
+              <YAxis type="category" dataKey="Technology" tick={{ fill: '#333', fontSize: 11, fontWeight: 700 }} width={95} />
+              <Tooltip {...ttStyle} formatter={v => fd(v)} />
+              <Legend wrapperStyle={{ fontSize: 11, fontWeight: 600, color: '#333' }} />
               <Bar dataKey="Capital" stackId="a" fill="#58b947" />
-              <Bar dataKey="Fixed OPEX" stackId="a" fill="#58b947" />
+              <Bar dataKey="Fixed OPEX" stackId="a" fill="#7cc96e" />
               <Bar dataKey="Var OPEX" stackId="a" fill="#f68d2e" />
               <Bar dataKey="Power" stackId="a" fill="#b83a4b" />
               <Bar dataKey="Fuel" stackId="a" fill="#93348f" />
             </BarChart>
           </ResponsiveContainer>
         </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 16px', marginTop: 10, fontSize: 11 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 16px', marginTop: 12, fontSize: 11 }}>
           {techData.map(t => (
-            <div key={t.key} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px', background: t.isCurrent ? '#fafafa' : 'transparent', border: t.isCurrent ? '1px solid #58b947' : '1px solid transparent' }}>
-              <span style={{ color: '#888888' }}>{t.Technology}:</span>
-              <span style={{ fontWeight: 700, color: t.isCurrent ? '#58b947' : '#444444' }}>{fd(t['Total LCOC'])}</span>
-              {t.isCurrent && <span style={{ fontSize: 9, color: '#58b947', fontWeight: 600 }}>SELECTED</span>}
+            <div key={t.key} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px', background: t.isCurrent ? '#f0faf0' : 'transparent', border: t.isCurrent ? '1px solid #58b947' : '1px solid transparent', borderRadius: 3 }}>
+              <span style={{ color: '#888' }}>{t.Technology}:</span>
+              <span style={{ fontWeight: 700, color: t.isCurrent ? '#58b947' : '#444' }}>{fd(t['Total LCOC'])}</span>
+              {t.isCurrent && <span style={{ fontSize: 9, color: '#58b947', fontWeight: 600 }}>CURRENT</span>}
             </div>
           ))}
         </div>
-        <div style={{ fontSize: 10, color: '#aaaaaa', marginTop: 8 }}>
-          Incompatible technologies not shown. Lower LCOC = more cost-effective.
-        </div>
+        <div style={note}>Incompatible technologies not shown. Lower LCOC = more cost-effective.</div>
       </div>
 
-      {/* Tech trend with learning */}
-      <div style={cd}>
-        <ChHead onPNG={() => exportPNG(techTrendRef, `Tech_Trend_${src}`)} onXLSX={() => exportXLSX([{ label: 'Tech Trends', data: techTrendData }], `Tech_Trend_${src}`)}>
-          {src} — Technology LCOC Trend with Learning Curves ({LF[st] ? LF[st].n : st})
-        </ChHead>
-        <div ref={techTrendRef}>
-          <ResponsiveContainer width="100%" height={280}>
-            <LineChart data={techTrendData} margin={{ top: 8, right: 12, bottom: 4, left: 8 }}>
-              <XAxis dataKey="Year" tick={{ fill: '#aaaaaa', fontSize: 10 }} />
-              <YAxis tick={{ fill: '#888888', fontSize: 10 }} tickFormatter={v => '$' + v} domain={['auto', 'auto']} />
-              <Tooltip contentStyle={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 0, fontSize: 11 }} formatter={(val) => fd(val)} />
-              <ReferenceLine x={yr} stroke="#333333" strokeDasharray="3 3" strokeWidth={1} />
-              {compatTechs.map(([k, t]) => (
-                <Line key={k} dataKey={t.n} stroke={techColors[k] || '#aaaaaa'} strokeWidth={k === tech ? 3 : 1.5} dot={false} opacity={k === tech ? 1 : 0.6} />
-              ))}
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px', marginTop: 8 }}>
-          {compatTechs.map(([k, t]) => (
-            <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, opacity: k === tech ? 1 : 0.7 }}>
-              <div style={{ width: 14, height: k === tech ? 3 : 2, background: techColors[k] || '#aaaaaa' }} />
-              <span style={{ color: k === tech ? '#444444' : '#888888', fontWeight: k === tech ? 600 : 400 }}>{t.n}</span>
-              <span style={{ color: '#aaaaaa', fontSize: 9 }}>({((t.learn || 0) * 100).toFixed(0)}%/yr)</span>
-              {k === tech && <span style={{ color: '#58b947', fontSize: 9 }}>●</span>}
-            </div>
-          ))}
-        </div>
-        <div style={{ fontSize: 10, color: '#aaaaaa', marginTop: 6 }}>
-          Learning curves reduce CAPEX/OPEX over time. CEPCI inflation partially offsets gains. Floor at 50% of base cost.
-        </div>
-      </div>
-
-      {/* Pure learning */}
-      <div style={cd}>
-        <ChHead onPNG={() => exportPNG(pureLearnRef, `Pure_Learn_${src}`)} onXLSX={() => exportXLSX([{ label: 'Pure Learning', data: pureLearnData }], `Pure_Learn_${src}`)}>
-          {src} — Technology Cost Reduction (Learning Only, 2018 USD)
-        </ChHead>
-        <div ref={pureLearnRef}>
-          <ResponsiveContainer width="100%" height={280}>
-            <LineChart data={pureLearnData} margin={{ top: 8, right: 12, bottom: 4, left: 8 }}>
-              <XAxis dataKey="Year" tick={{ fill: '#aaaaaa', fontSize: 10 }} />
-              <YAxis tick={{ fill: '#888888', fontSize: 10 }} tickFormatter={v => '$' + v} domain={['auto', 'auto']} />
-              <Tooltip contentStyle={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 0, fontSize: 11 }} formatter={(val) => fd(val)} />
-              <ReferenceLine x={yr} stroke="#333333" strokeDasharray="3 3" strokeWidth={1} />
-              {compatTechs.map(([k, t]) => (
-                <Line key={k} dataKey={t.n} stroke={techColors[k] || '#aaaaaa'} strokeWidth={k === tech ? 3 : 1.5} dot={false} opacity={k === tech ? 1 : 0.6} />
-              ))}
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px', marginTop: 8 }}>
-          {compatTechs.map(([k, t]) => {
-            const b = base2018 ? base2018[t.n] : 0;
-            const l = latestLearn ? latestLearn[t.n] : 0;
-            const pctDrop = b > 0 ? ((b - l) / b * 100).toFixed(0) : 0;
-            return (
-              <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, opacity: k === tech ? 1 : 0.7 }}>
-                <div style={{ width: 14, height: k === tech ? 3 : 2, background: techColors[k] || '#aaaaaa' }} />
-                <span style={{ color: k === tech ? '#444444' : '#888888', fontWeight: k === tech ? 600 : 400 }}>{t.n}</span>
-                <span style={{ color: '#58b947', fontSize: 9, fontWeight: 600 }}>↓{pctDrop}%</span>
+      <div style={G2}>
+        <div style={card}>
+          <ChHead onPNG={() => exportPNG(techTrendRef, `Tech_Trend_${src}`)} onXLSX={() => exportXLSX([{ label: 'Tech Trends', data: techTrendData }], `Tech_Trend_${src}`)}>
+            {src} — Tech LCOC with Learning Curves
+          </ChHead>
+          <div ref={techTrendRef}>
+            <ResponsiveContainer width="100%" height={H}>
+              <LineChart data={techTrendData} margin={margin}>
+                <XAxis dataKey="Year" tick={{ fill: '#333', fontSize: 10, fontWeight: 600 }} />
+                <YAxis tick={{ fill: '#333', fontSize: 10, fontWeight: 600 }} tickFormatter={v => '$' + v} domain={['auto', 'auto']} />
+                <Tooltip {...ttStyle} formatter={v => fd(v)} />
+                <ReferenceLine x={yr} stroke="#333" strokeDasharray="3 3" strokeWidth={1} />
+                {compatTechs.map(([k, t]) => (
+                  <Line key={k} dataKey={t.n} stroke={techColors[k] || '#aaa'} strokeWidth={k === tech ? 3 : 1.5} dot={false} opacity={k === tech ? 1 : 0.5} />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px', marginTop: 8 }}>
+            {compatTechs.map(([k, t]) => (
+              <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, opacity: k === tech ? 1 : 0.6 }}>
+                <div style={{ width: 14, height: k === tech ? 3 : 2, background: techColors[k] || '#aaa' }} />
+                <span style={{ color: k === tech ? '#444' : '#888', fontWeight: k === tech ? 600 : 400 }}>{t.n}</span>
+                <span style={{ color: '#aaa', fontSize: 9 }}>({((t.learn || 0) * 100).toFixed(0)}%/yr)</span>
                 {k === tech && <span style={{ color: '#58b947', fontSize: 9 }}>●</span>}
               </div>
-            );
-          })}
+            ))}
+          </div>
+          <div style={note}>Learning curves reduce costs over time. CEPCI inflation partially offsets. Floor at 50%.</div>
         </div>
-        <div style={{ fontSize: 10, color: '#aaaaaa', marginTop: 6 }}>
-          All values in constant 2018 USD (no inflation). Shows pure technology learning effect. Legend shows cumulative cost reduction 2018→{latestLearn?.Year || 2026}.
+
+        <div style={card}>
+          <ChHead onPNG={() => exportPNG(pureLearnRef, `Pure_Learn_${src}`)} onXLSX={() => exportXLSX([{ label: 'Pure Learning', data: pureLearnData }], `Pure_Learn_${src}`)}>
+            {src} — Pure Learning (2018 USD)
+          </ChHead>
+          <div ref={pureLearnRef}>
+            <ResponsiveContainer width="100%" height={H}>
+              <LineChart data={pureLearnData} margin={margin}>
+                <XAxis dataKey="Year" tick={{ fill: '#333', fontSize: 10, fontWeight: 600 }} />
+                <YAxis tick={{ fill: '#333', fontSize: 10, fontWeight: 600 }} tickFormatter={v => '$' + v} domain={['auto', 'auto']} />
+                <Tooltip {...ttStyle} formatter={v => fd(v)} />
+                <ReferenceLine x={yr} stroke="#333" strokeDasharray="3 3" strokeWidth={1} />
+                {compatTechs.map(([k, t]) => (
+                  <Line key={k} dataKey={t.n} stroke={techColors[k] || '#aaa'} strokeWidth={k === tech ? 3 : 1.5} dot={false} opacity={k === tech ? 1 : 0.5} />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px', marginTop: 8 }}>
+            {compatTechs.map(([k, t]) => {
+              const b = base2018 ? base2018[t.n] : 0;
+              const l = latestLearn ? latestLearn[t.n] : 0;
+              const pctDrop = b > 0 ? ((b - l) / b * 100).toFixed(0) : 0;
+              return (
+                <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, opacity: k === tech ? 1 : 0.6 }}>
+                  <div style={{ width: 14, height: k === tech ? 3 : 2, background: techColors[k] || '#aaa' }} />
+                  <span style={{ color: k === tech ? '#444' : '#888', fontWeight: k === tech ? 600 : 400 }}>{t.n}</span>
+                  <span style={{ color: '#58b947', fontSize: 9, fontWeight: 600 }}>↓{pctDrop}%</span>
+                  {k === tech && <span style={{ color: '#58b947', fontSize: 9 }}>●</span>}
+                </div>
+              );
+            })}
+          </div>
+          <div style={note}>Constant 2018 USD. No inflation — pure learning. Reduction 2018→{latestLearn?.Year || 2026}.</div>
         </div>
       </div>
 
-      {/* State LCOC Heatmap */}
-      <div style={{ ...cd, marginBottom: 18, marginTop: 18 }}>
+      {/* ═══════════════════════════════════════════════════════════
+          SECTION 6 — Geographic
+          ═══════════════════════════════════════════════════════════ */}
+      <div style={secHead}>Geographic Analysis</div>
+
+      <div style={cardMb}>
         <ChHead
           onPNG={() => exportPNG(mapRef, `State_LCOC_${src}_${yr}`)}
           onXLSX={() => exportXLSX([{ label: 'State LCOC', data: stateRows }], `State_LCOC_${src}_${yr}`)}
@@ -665,17 +883,16 @@ export default function ChartsTab({
                   key={code}
                   d={path}
                   fill={hColor(s.lcoc)}
-                  stroke="#111"
-                  strokeWidth={0.7}
+                  stroke="#222"
+                  strokeWidth={0.8}
                   strokeLinejoin="round"
-                  opacity={code === st ? 1 : 0.82}
-                  style={{ cursor: 'pointer', filter: code === st ? 'brightness(1.2)' : 'none' }}
+                  opacity={code === st ? 1 : 0.85}
+                  style={{ cursor: 'pointer', filter: code === st ? 'brightness(1.15)' : 'none' }}
                   onMouseEnter={() => setHovSt2(code)}
                   onMouseLeave={() => setHovSt2(null)}
                 />
               );
             })}
-            {/* State code labels */}
             {Object.entries(SL).map(([code, pos]) => {
               const s = stateMap[code];
               if (!s) return null;
@@ -685,49 +902,46 @@ export default function ChartsTab({
                   x={pos.x} y={pos.y}
                   textAnchor="middle"
                   dominantBaseline="middle"
-                  style={{ fontSize: 7, fontFamily: 'sans-serif', fill: '#fff', pointerEvents: 'none',
+                  style={{ fontSize: 7.5, fontFamily: 'sans-serif', fill: '#fff', pointerEvents: 'none',
                     fontWeight: code === st ? 700 : 400, opacity: 0.9 }}
                 >
                   {code}
                 </text>
               );
             })}
-            {/* AK/HI labels */}
             <text x={146} y={576} textAnchor="middle" style={{ fontSize: 8, fill: '#aaa', fontFamily: 'sans-serif' }}>Alaska</text>
             <text x={350} y={576} textAnchor="middle" style={{ fontSize: 8, fill: '#aaa', fontFamily: 'sans-serif' }}>Hawaii</text>
           </svg>
-          {/* Hover tooltip */}
           {hovSt2 && stateMap[hovSt2] && (
-            <div style={{ position: 'absolute', top: 8, right: 8, background: '#1c1c1c', border: '1px solid #444', padding: '10px 14px', fontSize: 11, minWidth: 170, pointerEvents: 'none', borderRadius: 3 }}>
-              <div style={{ fontWeight: 700, marginBottom: 6, color: '#fff' }}>{stateMap[hovSt2].name} ({hovSt2})</div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 3 }}>
+            <div style={{ position: 'absolute', top: 10, right: 10, background: '#1a1a1a', border: '1px solid #444', padding: '12px 16px', fontSize: 11, minWidth: 180, pointerEvents: 'none', borderRadius: 4 }}>
+              <div style={{ fontWeight: 700, marginBottom: 8, color: '#fff', fontSize: 12 }}>{stateMap[hovSt2].name} ({hovSt2})</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
                 <span style={{ color: '#aaa' }}>LCOC</span>
                 <span style={{ color: hColor(stateMap[hovSt2].lcoc), fontWeight: 700 }}>{fd(stateMap[hovSt2].lcoc)}/t</span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 3 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
                 <span style={{ color: '#aaa' }}>Power</span>
                 <span style={{ color: '#eee', fontWeight: 600 }}>${stateMap[hovSt2].pp.toFixed(1)}/MWh</span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 3 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
                 <span style={{ color: '#aaa' }}>Gas</span>
                 <span style={{ color: '#eee', fontWeight: 600 }}>${stateMap[hovSt2].gp.toFixed(2)}/MMBtu</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
                 <span style={{ color: '#aaa' }}>Hub</span>
-                <span style={{ color: '#eee', fontSize: 9 }}>{HUB_NAME[hovSt2] || 'Henry Hub'}</span>
+                <span style={{ color: '#eee', fontSize: 10 }}>{HUB_NAME[hovSt2] || 'Henry Hub'}</span>
               </div>
             </div>
           )}
         </div>
-        {/* Color legend */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 10 }}>
-          <span style={{ color: '#aaa', minWidth: 40, textAlign: 'right' }}>{fd(minL)}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, fontSize: 10 }}>
+          <span style={{ color: '#aaa', minWidth: 50, textAlign: 'right' }}>{fd(minL)}</span>
           <div style={{ flex: 1, height: 10, background: 'linear-gradient(to right, rgb(88,185,71), rgb(184,58,75))', borderRadius: 2 }} />
-          <span style={{ color: '#aaa', minWidth: 40 }}>{fd(maxL)}</span>
+          <span style={{ color: '#aaa', minWidth: 50 }}>{fd(maxL)}</span>
         </div>
-        <div style={{ fontSize: 9, color: '#aaa', marginTop: 4 }}>
-          Hover state for details. Cost year {yr}. Power = EIA state rates, gas = Henry Hub + state basis differential.
-          {st && stateMap[st] ? <span> Selected state: <strong style={{ color: '#58b947' }}>{stateMap[st].name} — {fd(stateMap[st].lcoc)}/t</strong></span> : null}
+        <div style={note}>
+          Hover for details. Cost year {yr}. Power = EIA state rates, gas = Henry Hub + basis differential.
+          {st && stateMap[st] ? <span> Selected: <strong style={{ color: '#58b947' }}>{stateMap[st].name} — {fd(stateMap[st].lcoc)}/t</strong></span> : null}
         </div>
       </div>
 

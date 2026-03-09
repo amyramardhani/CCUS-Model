@@ -18,7 +18,7 @@ export default function SimulationTab({
   const basePP = pp;
   const baseGP = gp;
   const baseCF = res.cf;
-  const baseCCF = v.ccf;
+  const baseCCF = res.discountRate;
   const srcCat = SC[src]?.cat || "Industrial";
   const isDac = srcCat === "CDR";
   const base45Q = isDac ? 180 : 85;
@@ -138,7 +138,7 @@ export default function SimulationTab({
         { key: "gp", label: "Natural Gas", color: "#93348f" },
         { key: "cf", label: "Capacity Factor", color: "#58a7af" },
         { key: "capex", label: "CAPEX Multiplier", color: "#93348f" },
-        { key: "ccf", label: "Capital Charge Factor", color: "#f68d2e" },
+        { key: "ccf", label: "WACC", color: "#f68d2e" },
         { key: "q45", label: "45Q Credit Rate", color: "#58b947" },
         { key: "cdr", label: "CDR Credit Rate", color: "#58a7af" },
         { key: "avoid", label: "Avoidance Credit", color: "#f68d2e" }
@@ -199,7 +199,7 @@ export default function SimulationTab({
               { key: "gasPrice", label: "Nat Gas ($/MMBtu)", base: baseGP, fmt: v2 => "$" + v2.toFixed(2), hide: !res.hasFuel },
               { key: "capFactor", label: "Capacity Factor (%)", base: Math.round(baseCF * 100), fmt: v2 => v2.toFixed(0) + "%" },
               { key: "capexMult", label: "CAPEX Multiplier", base: 1.0, fmt: v2 => v2.toFixed(2) + "×" },
-              { key: "ccfMult", label: "CCF", base: baseCCF, fmt: v2 => (v2 * 100).toFixed(2) + "%" },
+              { key: "ccfMult", label: "WACC", base: baseCCF, fmt: v2 => (v2 * 100).toFixed(2) + "%" },
               { key: "q45Rate", label: "45Q Rate ($/t)", base: base45Q, fmt: v2 => "$" + v2.toFixed(0), hide: !use45Q },
               { key: "cdrRate", label: "CDR Credit ($/t)", base: cdrCreditRate, fmt: v2 => "$" + v2.toFixed(0), hide: !useCDRCredit },
               { key: "avoidRate", label: "Avoidance ($/t)", base: avoidCreditRate, fmt: v2 => "$" + v2.toFixed(0), hide: !useAvoidCredit }
@@ -454,7 +454,7 @@ export default function SimulationTab({
             <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 800 }}>
               <thead>
                 <tr style={{ borderBottom: "2px solid #e0e0e0" }}>
-                  {["Name", "Elec ($/MWh)", "Gas ($/MMBtu)", "CF (%)", "CAPEX Mult", "CCF", "45Q ($/t)", "CDR ($/t)", "Avoid ($/t)", ""].map(h2 => (
+                  {["Name", "Elec ($/MWh)", "Gas ($/MMBtu)", "CF (%)", "CAPEX Mult", "WACC", "45Q ($/t)", "CDR ($/t)", "Avoid ($/t)", ""].map(h2 => (
                     <th key={h2} style={{ padding: "6px 8px", fontSize: 9, fontWeight: 700, color: "#888888", textTransform: "uppercase", textAlign: "left" }}>{h2}</th>
                   ))}
                 </tr>

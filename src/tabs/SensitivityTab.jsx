@@ -12,7 +12,7 @@ export default function SensitivityTab({
   const baseCF0 = res.cf;
   const basePP0 = pp;
   const baseGP0 = gp;
-  const baseCCF0 = v.ccf;
+  const baseCCF0 = res.discountRate;
   const baseCOC0 = res.total;
 
   const sBox = { background: "#fff", border: "1px solid #e0e0e0", padding: "18px 20px", marginBottom: 14 };
@@ -54,7 +54,7 @@ export default function SensitivityTab({
     { name: "Electricity Price", low: calc(basePP*(1-pct), baseGP, baseCF, baseCapexMult, baseCCF, baseCO2mult), high: calc(basePP*(1+pct), baseGP, baseCF, baseCapexMult, baseCCF, baseCO2mult), baseL: "$"+(basePP*(1-pct)).toFixed(0), baseH: "$"+(basePP*(1+pct)).toFixed(0), baseV: "$"+basePP+"/MWh", color: "#b83a4b" },
     { name: "CAPEX Multiplier", low: calc(basePP, baseGP, baseCF, baseCapexMult*(1-pct), baseCCF, baseCO2mult), high: calc(basePP, baseGP, baseCF, baseCapexMult*(1+pct), baseCCF, baseCO2mult), baseL: (baseCapexMult*(1-pct)).toFixed(2)+"×", baseH: (baseCapexMult*(1+pct)).toFixed(2)+"×", baseV: baseCapexMult.toFixed(2)+"×", color: "#93348f" },
     { name: "Capacity Factor", low: calc(basePP, baseGP, Math.min(baseCF*(1+pct),0.99), baseCapexMult, baseCCF, baseCO2mult), high: calc(basePP, baseGP, baseCF*(1-pct), baseCapexMult, baseCCF, baseCO2mult), baseL: Math.min(Math.round(baseCF*(1+pct)*100),99)+"%", baseH: Math.round(baseCF*(1-pct)*100)+"%", baseV: Math.round(baseCF*100)+"%", color: "#58a7af" },
-    { name: "CCF", low: calc(basePP, baseGP, baseCF, baseCapexMult, baseCCF*(1-pct), baseCO2mult), high: calc(basePP, baseGP, baseCF, baseCapexMult, baseCCF*(1+pct), baseCO2mult), baseL: (baseCCF*(1-pct)*100).toFixed(2)+"%", baseH: (baseCCF*(1+pct)*100).toFixed(2)+"%", baseV: (baseCCF*100).toFixed(2)+"%", color: "#f68d2e" },
+    { name: "WACC", low: calc(basePP, baseGP, baseCF, baseCapexMult, baseCCF*(1-pct), baseCO2mult), high: calc(basePP, baseGP, baseCF, baseCapexMult, baseCCF*(1+pct), baseCO2mult), baseL: (baseCCF*(1-pct)*100).toFixed(2)+"%", baseH: (baseCCF*(1+pct)*100).toFixed(2)+"%", baseV: (baseCCF*100).toFixed(2)+"%", color: "#f68d2e" },
     { name: "CO₂ Flow Rate", low: calc(basePP, baseGP, baseCF, baseCapexMult, baseCCF, baseCO2mult*(1+pct)), high: calc(basePP, baseGP, baseCF, baseCapexMult, baseCCF, baseCO2mult*(1-pct)), baseL: fm(Math.round(res.pCO2*baseCO2mult*(1+pct)),0)+" t/yr", baseH: fm(Math.round(res.pCO2*baseCO2mult*(1-pct)),0)+" t/yr", baseV: fm(Math.round(res.pCO2*baseCO2mult),0)+" t/yr", color: "#58a7af" },
   ];
   if (res.hasFuel) {
@@ -129,7 +129,7 @@ export default function SensitivityTab({
           { key: "pp", label: "Electricity", val: basePP, base: basePP0, min: Math.round(basePP0 * 0.3), max: Math.round(basePP0 * 2), step: 1, fmt: v => "$" + v + "/MWh", color: "#b83a4b" },
           { key: "capex", label: "CAPEX Mult", val: baseCapexMult, base: 1.0, min: 0.5, max: 2.0, step: 0.01, fmt: v => v.toFixed(2) + "×", color: "#93348f" },
           { key: "cf", label: "Capacity Factor", val: baseCF, base: baseCF0, min: 0.40, max: 0.99, step: 0.01, fmt: v => Math.round(v * 100) + "%", color: "#58a7af" },
-          { key: "ccf", label: "CCF", val: baseCCF, base: baseCCF0, min: Math.round(baseCCF0 * 0.5 * 1000) / 1000, max: Math.round(baseCCF0 * 2 * 1000) / 1000, step: 0.001, fmt: v => (v * 100).toFixed(1) + "%", color: "#f68d2e" },
+          { key: "ccf", label: "WACC", val: baseCCF, base: baseCCF0, min: Math.round(baseCCF0 * 0.5 * 1000) / 1000, max: Math.round(baseCCF0 * 2 * 1000) / 1000, step: 0.001, fmt: v => (v * 100).toFixed(1) + "%", color: "#f68d2e" },
           { key: "co2", label: "CO₂ Flow", val: baseCO2mult, base: 1.0, min: 0.3, max: 2.0, step: 0.01, fmt: v => v.toFixed(2) + "×", color: "#58a7af" },
         ];
         if (res.hasFuel) {

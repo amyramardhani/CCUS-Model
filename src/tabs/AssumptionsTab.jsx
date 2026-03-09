@@ -229,7 +229,7 @@ export default function AssumptionsTab({ res, src, st, yr, tech, codYear, projLi
             <div style={{ background: "#fafafa", border: "1px solid #f0f0f0", borderRadius: 4, padding: "12px 14px" }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#666666", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.04em" }}>Total LCOC Formula</div>
               <div style={{ fontFamily: "Courier New, monospace", fontSize: 11, color: "#555555", lineHeight: 1.8 }}>
-                LCOC = (CAPEX × CCF<br />
+                LCOC = (CAPEX × WACC<br />
                 &nbsp;&nbsp;+ FixedOPEX + VarOPEX<br />
                 &nbsp;&nbsp;+ PowerCost + FuelCost)<br />
                 &nbsp;&nbsp;/ Annual_CO₂_tonnes
@@ -256,11 +256,11 @@ export default function AssumptionsTab({ res, src, st, yr, tech, codYear, projLi
             </div>
             {/* Capital Charge Factor */}
             <div>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#444444", marginBottom: 8, borderBottom: "1px solid #e0e0e0", paddingBottom: 4 }}>Capital Charge Factor (CCF)</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#444444", marginBottom: 8, borderBottom: "1px solid #e0e0e0", paddingBottom: 4 }}>WACC (Weighted Average Cost of Capital)</div>
               <div style={{ fontSize: 11, color: "#666666", lineHeight: 1.7 }}>
-                CCF converts total overnight cost (CAPEX) into an equivalent annual capital charge ($/t CO₂):<br /><br />
-                <strong>Capital_charge = CAPEX × CCF / Annual_CO₂</strong><br /><br />
-                CCF embeds: cost of capital (WACC), tax depreciation shield, insurance, and inflation-during-construction (TASC). It is a fixed multiplier from NETL methodology, ranging from 4.55% (Refinery H₂, low-risk/high-leverage) to 8.50% (DAC, early-stage/high-risk).
+                WACC is applied directly to CAPEX to compute the annual capital charge ($/t CO₂):<br /><br />
+                <strong>Capital_charge = CAPEX × WACC / Annual_CO₂</strong><br /><br />
+                WACC = (Debt% × Cost of Debt) + (Equity% × Cost of Equity). It reflects the blended cost of financing from both debt and equity sources.
               </div>
             </div>
             {/* TASC */}
@@ -293,7 +293,7 @@ export default function AssumptionsTab({ res, src, st, yr, tech, codYear, projLi
                 <th style={{...aTh, textAlign:"right"}}>Debt %</th>
                 <th style={{...aTh, textAlign:"right"}}>Cost of Debt</th>
                 <th style={{...aTh, textAlign:"right"}}>ROE</th>
-                <th style={{...aTh, textAlign:"right"}}>CCF</th>
+                <th style={{...aTh, textAlign:"right"}}>WACC</th>
                 <th style={{...aTh, textAlign:"right"}}>TASC/TOC</th>
                 <th style={{...aTh, textAlign:"right"}}>Constr. Yrs</th>
                 <th style={{...aTh, textAlign:"right"}}>CAPEX Schedule</th>
@@ -312,7 +312,7 @@ export default function AssumptionsTab({ res, src, st, yr, tech, codYear, projLi
                     <td style={aTdR}>{f.debtPct}%</td>
                     <td style={aTdR}>{f.costDebt.toFixed(2)}%</td>
                     <td style={aTdR}>{f.roe.toFixed(2)}%</td>
-                    <td style={{...aTdR, color:"#58a7af"}}>{(f.ccf*100).toFixed(2)}%</td>
+                    <td style={{...aTdR, color:"#58a7af"}}>{((f.debtPct/100)*f.costDebt + ((100-f.debtPct)/100)*f.roe).toFixed(2)}%</td>
                     <td style={aTdR}>{f.tascToc.toFixed(3)}×</td>
                     <td style={aTdR}>{f.constructionYrs} yr</td>
                     <td style={{...aTdR, fontSize:9, color:"#888888"}}>{f.capexDist.map((d,i)=>`Y${i+1}:${(d*100).toFixed(0)}%`).join(" / ")}</td>
@@ -323,7 +323,7 @@ export default function AssumptionsTab({ res, src, st, yr, tech, codYear, projLi
                 })}
               </tbody>
             </table>
-            <div style={noteStyle}>Source: NETL engineering cost reports. ROE = Return on Equity (levered). CCF = Capital Charge Factor incorporating cost of capital, depreciation, tax, and insurance. Highlighted row = currently selected source.</div>
+            <div style={noteStyle}>Source: NETL engineering cost reports. ROE = Return on Equity (levered). WACC = Weighted Average Cost of Capital applied directly to CAPEX. Highlighted row = currently selected source.</div>
           </div>
         </div>
       </div>
@@ -629,7 +629,7 @@ export default function AssumptionsTab({ res, src, st, yr, tech, codYear, projLi
         <div style={{ overflowX: "auto", padding: "0 0 10px" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1100 }}>
             <thead><tr>
-              {["Source","Category","Ref Size","CO₂ t/yr","TIC ($M)","CAPEX ($M)","Fixed $/t","Var $/t","Power MW","Fuel $/t","CCF","Base State"].map(h => (
+              {["Source","Category","Ref Size","CO₂ t/yr","TIC ($M)","CAPEX ($M)","Fixed $/t","Var $/t","Power MW","Fuel $/t","WACC","Base State"].map(h => (
                 <th key={h} style={{...aTh, whiteSpace:"nowrap", padding:"6px 8px"}}>{h}</th>
               ))}
             </tr></thead>
@@ -648,7 +648,7 @@ export default function AssumptionsTab({ res, src, st, yr, tech, codYear, projLi
                     <td style={{...aTdR, padding:"5px 8px"}}>{(d.vo||s.vo||0).toFixed(2)}</td>
                     <td style={{...aTdR, padding:"5px 8px"}}>{(d.pw||s.pw||0).toFixed(0)}</td>
                     <td style={{...aTdR, padding:"5px 8px"}}>{(d.fl||s.fl||0).toFixed(2)}</td>
-                    <td style={{...aTdR, padding:"5px 8px", color:"#58a7af"}}>{((d.ccf||s.ccf||0.06)*100).toFixed(2)}%</td>
+                    <td style={{...aTdR, padding:"5px 8px", color:"#58a7af"}}>{(()=>{ const fin=NETL_FIN[name]; return fin ? ((fin.debtPct/100)*fin.costDebt+((100-fin.debtPct)/100)*fin.roe).toFixed(2) : ((d.ccf||s.ccf||0.06)*100).toFixed(2); })()}%</td>
                     <td style={{...aTdG, padding:"5px 8px"}}>{LF[s.bs]?.n||s.bs}</td>
                   </tr>
                 );
@@ -656,7 +656,7 @@ export default function AssumptionsTab({ res, src, st, yr, tech, codYear, projLi
             </tbody>
           </table>
         </div>
-        <div style={noteStyle}>All costs in 2018 USD. CAPEX = TIC + Owner's Costs. OPEX in $/t CO₂. Power = parasitic load at reference capacity. Fuel = natural gas cost at $4.42/MMBtu base. CCF includes capital recovery, depreciation, taxes, and insurance. Source: DOE/NETL engineering cost reports.</div>
+        <div style={noteStyle}>All costs in 2018 USD. CAPEX = TIC + Owner's Costs. OPEX in $/t CO₂. Power = parasitic load at reference capacity. Fuel = natural gas cost at $4.42/MMBtu base. WACC applied directly to CAPEX for annual capital charge. Source: DOE/NETL engineering cost reports.</div>
       </div>
 
       {/* ── 10. LOCATION FACTORS ── */}
@@ -686,7 +686,7 @@ export default function AssumptionsTab({ res, src, st, yr, tech, codYear, projLi
               { name: "CAPEX Scale (Six-Tenths)", formula: "TIC_scaled = TIC_ref × (capacity_ratio) ^ 0.60", note: "capacity_ratio = user_CO₂ / ref_CO₂ (or plant capacity ratio)" },
               { name: "Fixed OPEX Scale", formula: "FOM_scaled = FOM_ref × (1/capacity_ratio)^0.15 × CEPCI_ratio", note: "Per-unit fixed costs decrease at larger scale" },
               { name: "Variable OPEX", formula: "VOM_scaled = VOM_ref × CEPCI_ratio", note: "No scale adjustment — proportional to throughput" },
-              { name: "Capital Charge ($/t)", formula: "capC = CAPEX_scaled × CCF / annual_CO₂_tonnes", note: "CCF from NETL or user-defined financing parameters" },
+              { name: "Capital Charge ($/t)", formula: "capC = CAPEX_scaled × WACC / annual_CO₂_tonnes", note: "WACC from user-defined financing parameters" },
               { name: "Power Cost ($/t)", formula: "pPt = Power_MW_scaled × $/MWh × CF × 8,760 / annual_CO₂", note: "Parasitic electricity × price × operating hours" },
               { name: "Fuel Cost ($/t)", formula: "sFL = fuel_ref × (gas_price / $4.42)", note: "Linear scaling from NETL 2018 gas price base" },
               { name: "WACC", formula: "WACC = Debt% × r_d × (1−Tax) + Equity% × r_e", note: "After-tax WACC. Equity% = 1 − Debt%" },
@@ -719,7 +719,7 @@ export default function AssumptionsTab({ res, src, st, yr, tech, codYear, projLi
             ["OPEX Completeness", "OPEX costs do not include CO₂ compression to pipeline pressure (if separate from capture plant), transport pipeline O&M, injection well operation, long-term monitoring, verification, and reporting (MVR), or decommissioning."],
             ["Energy Prices", "Electricity and natural gas prices are treated as constant over project life (no escalation). No time-of-use pricing, demand charges, or interruptible supply discounts are modeled."],
             ["CEPCI Projections", "CEPCI values for 2025–2026 are estimated projections and may differ from actual published values. Monitor chemengonline.com for updates."],
-            ["Capital Charge Factor", "NETL CCFs embed specific financing assumptions that may not match project-specific terms. The custom financial model (WACC + NPV) provides more flexibility but requires user-defined inputs."],
+            ["WACC / Capital Charge", "WACC is applied directly to CAPEX as the annual capital charge rate. This simplifies the NETL CCF approach but does not account for tax depreciation shields or construction-period interest separately."],
             ["NGCC Retrofit Assumption", "NGCC cost scenarios represent incremental retrofit costs only. The host gas turbine plant CAPEX, OPEX, fuel, and generation revenue are excluded. Capture plant parasitic load reduces net electricity output."],
             ["Biomass Carbon Accounting", "Biomass (BECCS) CO₂ emission factor is set to zero per biogenic carbon accounting convention. Full life-cycle carbon balance (land use, feedstock supply chain) is not captured in this model."],
             ["Location Factors", "State-level location factors are area averages. Site-specific conditions (soil conditions, seismic zone, local permitting requirements, labor market tightness, remote location) are not captured."],

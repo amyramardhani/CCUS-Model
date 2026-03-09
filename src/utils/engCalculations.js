@@ -1,4 +1,4 @@
-import { SC } from '../constants';
+import { SC, CEPCI, LF, TECH, BASE_GP } from '../constants';
 
 // Power plant capacity / emission defaults by source — used to pre-populate plant-size inputs
 export const PP_DEFAULTS = {
@@ -68,9 +68,6 @@ export function gv(src, crInput, bt) {
 
   if (!hasCR) {
     estCR = true;
-    // Linear interpolation: 90% = 1.0, 99% = 1.10 (10% cost increase per 9% CR increase)
-    const crDiff = crNum - baseCRNum;
-    crAdj = 1 + (crDiff / 9) * 0.10;
   }
 
   if (!hasBT) {
@@ -79,21 +76,107 @@ export function gv(src, crInput, bt) {
     else if (bt === "Retrofit" && baseBT === "Greenfield") btAdj = 1.08;
   }
 
-  const adj = crAdj * btAdj;
-  const pwAdj = !hasCR ? (1 + (crNum - baseCRNum) / 9 * 0.08) : 1;
+  // CO₂ captured scales linearly with capture rate
   const rcoAdj = !hasCR ? (crNum / baseCRNum) : 1;
+
+  // ── Capture rate adjustments ──────────────────────────────────────
+  // Equipment is sized by plant capacity (flue gas volume), NOT capture rate.
+  // The six-tenths rule applies to plant size scaling (sR in the main calc).
+  // CR changes affect cost through thermodynamic difficulty, not equipment size.
+  //
+  // Thermodynamic difficulty: -ln(1 - CR) represents the minimum separation
+  // work. Going from 90% to 99% doubles the thermodynamic load because
+  // -ln(0.01) / -ln(0.10) = 2.0.
+  const thermoBase = !hasCR ? -Math.log(1 - baseCRNum / 100) : 1;
+  const thermoNew  = !hasCR ? -Math.log(1 - crNum / 100) : 1;
+  const thermoRatio = thermoNew / thermoBase;
+
+  // CAPEX: capture equipment is sized for CO₂ produced (total gas flow),
+  // not CO₂ captured. Changing capture rate doesn't change equipment size —
+  // it changes how hard the equipment runs (energy, solvent, chemicals).
+  const crCapexAdj = 1;
+
+  // FOM (per-tonne): total fixed costs ~constant (same equipment, same crew).
+  // More CO₂ captured → lower per-tonne fixed cost.
+  const crFomAdj = !hasCR ? (1 / rcoAdj) : 1;
+
+  // VOM (per-tonne): solvent degradation, chemical consumption, and water
+  // treatment increase with deeper capture (more aggressive solvent cycling).
+  const crVomAdj = !hasCR ? Math.pow(thermoRatio, 0.2) : 1;
+
+  // Power: reboiler duty + compression scale with thermodynamic difficulty.
+  // Dampened from pure thermo (real systems have heat integration).
+  const pwAdj = !hasCR ? Math.pow(thermoRatio, 0.4) : 1;
 
   return {
     ...base,
-    tic: base.tic * adj,
-    toc: base.toc * adj,
-    fo:  base.fo  * adj,
-    vo:  base.vo  * adj,
+    tic: base.tic * crCapexAdj * btAdj,
+    toc: base.toc * crCapexAdj * btAdj,
+    fo:  base.fo  * crFomAdj * btAdj,
+    vo:  base.vo  * crVomAdj * btAdj,
     pw:  base.pw  * pwAdj,
     rco: base.rco * rcoAdj,
     estCR,
     estBT,
     isEst: estCR || estBT,
-    crNumeric: crNum
+    crNumeric: crNum,
+    // Raw base values (before CR/BT adjustments) for display
+    _raw: { tic: base.tic, toc: base.toc, fo: base.fo, vo: base.vo, pw: base.pw, rco: base.rco },
+    // Adjustment factors for display
+    _adj: { thermoRatio, rcoAdj, crCapexAdj, crFomAdj, crVomAdj, pwAdj, btAdj, baseCRNum, baseBT, hasCR, hasBT },
+  };
+}
+
+/**
+ * calcLCOC — Single centralized LCOC calculation used by both the dashboard and batch model.
+ *
+ * @param {object} params
+ * @param {object} params.vd        — variant data from gv()
+ * @param {number} params.pCO2      — annual CO₂ captured (t/yr), already CF-adjusted
+ * @param {number} params.sR        — size ratio vs NETL reference (1.0 = reference)
+ * @param {string} params.techKey   — technology key (e.g. "amine")
+ * @param {number} params.yr        — cost year for CEPCI escalation
+ * @param {string} params.st        — 2-letter state code for location factor
+ * @param {number} params.pp        — electricity price $/MWh
+ * @param {number} params.gp        — natural gas price $/MMBtu
+ * @param {number} params.cf        — capacity factor (0–1)
+ * @param {number} params.discountRate — WACC or fixed hurdle (decimal, e.g. 0.08)
+ *
+ * @returns {object} full cost breakdown
+ */
+export function calcLCOC({ vd, pCO2, sR, techKey, yr, st, pp, gp, cf, discountRate }) {
+  const tF = TECH[techKey] || TECH.amine;
+  const cR = (CEPCI[yr] || CEPCI[2026]) / CEPCI[2018];
+  const lR = (LF[st] ? LF[st].f : 1) / (LF[vd.bs] ? LF[vd.bs].f : 0.97);
+  const cS = (sR !== 1) ? Math.pow(sR, 0.6) : 1;
+
+  const rT = vd.tic * 1e6, rOwn = (vd.toc - vd.tic) * 1e6;
+  const sT = rT * cS * cR * lR * tF.capex;
+  const sOwn = rOwn * cS * cR * lR * tF.capex;
+  const sTOC = sT + sOwn;
+
+  const capC = (sTOC * discountRate) / pCO2;
+
+  const fS = (sR !== 1) ? Math.pow(1 / sR, 0.15) : 1;
+  const sFO = vd.fo * fS * cR * tF.opex;
+  const sVO = vd.vo * cR * tF.opex;
+
+  const sPW = vd.pw * sR * tF.power;
+  const aPwr = sPW * pp * cf * 8760;
+  const pPt = aPwr / pCO2;
+
+  const bfl = vd.fl || 0;
+  const sFL = bfl * (gp / BASE_GP);
+
+  const total = capC + sFO + sVO + pPt + sFL;
+
+  return {
+    vd, pCO2, sR, cR, lR, cS, fS, tF,
+    rT, rOwn, sT, sOwn, sTOC,
+    tpt: sT / pCO2, opt: sOwn / pCO2, tocpt: sTOC / pCO2,
+    sFO, sVO, tOM: sFO + sVO,
+    sPW, aPwr, pPt, capC,
+    sFL, bfl, hasFuel: bfl > 0,
+    total, discountRate,
   };
 }
